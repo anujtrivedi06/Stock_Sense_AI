@@ -1,0 +1,38 @@
+# Core Data Science Libraries
+numpy>=1.23.0
+pandas>=1.5.0
+scikit-learn>=1.2.0
+
+# Machine Learning Models
+xgboost>=1.7.0
+
+# Stock Data
+yfinance>=0.2.0
+
+# Sentiment Analysis
+vaderSentiment>=3.3.2
+
+# Web Scraping
+requests>=2.28.0
+beautifulsoup4>=4.11.0
+
+# Google Trends
+pytrends>=4.9.0
+
+# Reddit API (optional, fallback to scraping)
+praw>=7.7.0
+
+# News API (optional)
+newsapi-python>=0.2.7
+
+# Dashboard
+streamlit>=1.25.0
+plotly>=5.14.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Utilities
+python-dateutil>=2.8.0
+pytz>=2023.3
