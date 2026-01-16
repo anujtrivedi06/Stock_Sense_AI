@@ -74,8 +74,9 @@ class FeatureEngineer:
         # ---- Fill missing sentiment values safely ----
         sentiment_cols = [
             col for col in df.columns
-            if any(x in col for x in ['sentiment', 'reddit', 'news'])
+            if any(x in col for x in ['sentiment', 'reddit', 'news', 'ratio', 'volume', 'engagement'])
         ]
+
         df[sentiment_cols] = df[sentiment_cols].fillna(0)
 
         # ---- Create lagged sentiment features (CRITICAL) ----

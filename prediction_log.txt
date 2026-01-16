@@ -1,0 +1,83 @@
+============================================================
+PROJECT KASSANDRA 
+============================================================
+
+Timestamp: 2026-01-16 
+
+Stock Ticker: TSLA
+Evaluation Timeline: 2025-01-01 to 2026-01-15
+
+------------------------------------------------------------
+PREDICTION SUMMARY
+------------------------------------------------------------
+Current Closing Price: $439.20
+Predicted Next-Day Closing Price: $437.03
+
+Expected Change: -$2.17
+Expected Change (%): -0.49%
+
+Trading Signal: SELL
+
+------------------------------------------------------------
+MODEL DETAILS
+------------------------------------------------------------
+Primary Model Used: Gradient Boosting Regressor  
+Additional Models Evaluated:
+- Random Forest Regressor  
+- XGBoost Regressor  
+
+Feature Sources Utilized:
+- Stock Market Data (Yahoo Finance OHLCV)
+- Technical Indicators (SMA, RSI, MACD, Volatility)
+- News Sentiment (FinViz and Yahoo Finance)
+- Reddit Sentiment (wallstreetbets, stocks, investing, stockstobuytoday)
+- Google Trends Search Interest
+
+Total Engineered Features: 55
+
+------------------------------------------------------------
+EVALUATION METRICS (From Training Phase)
+------------------------------------------------------------
+
+Dataset Split:
+- Train Samples: 206
+- Test Samples: 52
+
+Performance Metrics on Test Set:
+- Root Mean Squared Error (RMSE): 24.4553
+- Mean Absolute Error (MAE): 19.4521
+- Mean Absolute Percentage Error (MAPE): 4.3260%
+- Direction Accuracy: 47.0588%
+
+Model Artifact:
+- Trained Model File: outputs/trained_model.pkl
+- Processed Features File: outputs/processed_features.csv
+- Detailed Prediction Log: outputs/prediction_log.csv
+
+------------------------------------------------------------
+DATA SOURCES USED FOR THIS PREDICTION
+------------------------------------------------------------
+- Live Yahoo Finance market data
+- Real-time FinViz news headlines
+- Real-time Reddit discussions
+- Google Trends public interest signals
+
+------------------------------------------------------------
+METHODOLOGY NOTES
+------------------------------------------------------------
+
+- All alternative data sources are aligned by date to prevent temporal leakage.
+- Sentiment features are lagged to ensure only past information is used.
+- Target variable is defined as the next-day closing price.
+- Time-based train/test split is used instead of random splitting.
+- Missing sentiment values are treated as neutral (0) to preserve historical data.
+
+------------------------------------------------------------
+CONCLUSION
+------------------------------------------------------------
+
+The system successfully generated a real-time prediction for the Mystery Stock using live market and sentiment data. The model demonstrates reasonable predictive performance and provides explainable signals derived from multiple alternative data streams.
+
+============================================================
+END OF REPORT
+============================================================
