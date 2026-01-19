@@ -1,11 +1,11 @@
 # config.py
 """
-Configuration file for Project Kassandra
+Configuration file for Project StockSenseAI
 Modify STOCK_NAME and TIMELINE as needed
 """
 
 # Stock Configuration
-STOCK_NAME = "DIS"  # Change this for mystery stock
+STOCK_NAME = "DIS"  
 START_DATE = "2021-01-16"
 END_DATE = "2026-01-16"
 
@@ -13,7 +13,7 @@ END_DATE = "2026-01-16"
 NEWS_API_KEY = "your_newsapi_key_here"  # Get from newsapi.org
 REDDIT_CLIENT_ID = "your_reddit_client_id"
 REDDIT_CLIENT_SECRET = "your_reddit_secret"
-REDDIT_USER_AGENT = "KassandraBot/1.0"
+REDDIT_USER_AGENT = "StockSenseAIBot/1.0"
 
 # Feature Engineering Parameters
 SENTIMENT_WINDOW = 3  # Days to aggregate sentiment

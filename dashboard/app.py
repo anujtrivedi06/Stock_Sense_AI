@@ -22,13 +22,13 @@ import config
 
 # ---------------- PAGE CONFIG ---------------- #
 st.set_page_config(
-    page_title="Project Kassandra – Mystery Stock",
+    page_title="Project StockSenseAI – Mystery Stock",
     page_icon="📈",
     layout="wide"
 )
 
 # ---------------- HEADER ---------------- #
-st.title("🔮 Project Kassandra – Universal Sentiment Engine")
+st.title("🔮 Project StockSenseAI – Universal Sentiment Engine")
 st.caption("Phase 3: Mystery Stock – Live Prediction Dashboard")
 st.markdown("---")
 
@@ -187,4 +187,4 @@ st.plotly_chart(fig, use_container_width=True)
 # ---------------- FOOTER ---------------- #
 st.markdown("---")
 st.caption(f"Prediction generated live • {last_updated}")
-st.caption("Project Kassandra – Phase 3 Submission")
+st.caption("Project StockSenseAI – Phase 3 Submission")

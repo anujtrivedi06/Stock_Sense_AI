@@ -1,6 +1,6 @@
 # main.py
 """
-Main pipeline for Project Kassandra
+Main pipeline for Project StockSenseAI
 Complete end-to-end stock prediction system
 """
 import sys
@@ -152,8 +152,8 @@ def main():
     Main execution pipeline
     """
     print("\n" + "🚀"*30)
-    print("PROJECT KASSANDRA - UNIVERSAL SENTIMENT ENGINE")
-    print("🚀"*30 + "\n")
+    print("PROJECT StockSense AI - UNIVERSAL SENTIMENT ENGINE")
+    print("="*30 + "\n")
     
     print(f"Stock: {config.STOCK_NAME}")
     print(f"Timeline: {config.START_DATE} to {config.END_DATE}")
