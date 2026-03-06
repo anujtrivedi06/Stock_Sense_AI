@@ -1,18 +1,23 @@
 # config.py
+
 """
 Configuration file for Project StockSenseAI
 Modify STOCK_NAME and TIMELINE as needed
 """
+from dotenv import load_dotenv
+import os
+load_dotenv()  # Load environment variables from .env file
+
 
 # Stock Configuration
-STOCK_NAME = "DIS"  
+STOCK_NAME = "GOOG"  
 START_DATE = "2021-01-16"
-END_DATE = "2026-01-16"
+END_DATE = "2026-02-26"
 
 # API Keys (Get free keys from respective platforms)
-NEWS_API_KEY = "your_newsapi_key_here"  # Get from newsapi.org
-REDDIT_CLIENT_ID = "your_reddit_client_id"
-REDDIT_CLIENT_SECRET = "your_reddit_secret"
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")  # Get from newsapi.org
+REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
+REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = "StockSenseAIBot/1.0"
 
 # Feature Engineering Parameters

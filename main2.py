@@ -20,6 +20,7 @@ from data_scrapers.trends_scraper2 import TrendsScraper
 from data_scrapers.reddit_scraper2 import RedditScraper
 from features.feature_engineering import FeatureEngineer
 from model.predictor import StockPredictor
+from backtest import Backtester
 import config
 
 def create_output_dir():
@@ -48,7 +49,7 @@ def fetch_all_data(stock_name, start_date, end_date):
     news_scraper = NewsScraper()
     news_df = news_scraper.get_daily_sentiment(stock_name)
 
-    # 3. Google Trends (unchanged)
+    # 3. Google Trends
     trends_scraper = TrendsScraper()
     trends_df = trends_scraper.get_search_trends(stock_name, start_date, end_date)
 
@@ -65,7 +66,6 @@ def fetch_all_data(stock_name, start_date, end_date):
                 company_map[stock_name], start_date, end_date
             )
 
-
     # 4. Reddit Sentiment (DAILY, DATE-ALIGNED)
     reddit_scraper = RedditScraper()
     reddit_df = reddit_scraper.get_daily_reddit_sentiment(stock_name)
@@ -74,7 +74,6 @@ def fetch_all_data(stock_name, start_date, end_date):
 
 
 def engineer_features(stock_df, news_df, trends_df, reddit_df):
-
     """
     Create all features
     """
@@ -87,11 +86,11 @@ def engineer_features(stock_df, news_df, trends_df, reddit_df):
         stock_df, news_df, trends_df, reddit_df
     )
 
-    
     print(f"✓ Created {len(engineer.feature_columns)} features")
     print(f"✓ Dataset shape: {combined_df.shape}")
     
     return combined_df, engineer
+
 
 def train_and_evaluate(combined_df, engineer):
     """
@@ -121,33 +120,16 @@ def train_and_evaluate(combined_df, engineer):
     
     return predictor, metrics, predictions, test_df
 
-# def generate_prediction_log(test_df, predictions):
-#     """
-#     Generate prediction log CSV
-#     """
-#     print("\n" + "="*60)
-#     print("📝 GENERATING PREDICTION LOG")
-#     print("="*60)
-    
-#     log_df = pd.DataFrame({
-#         'Date': test_df['Date'].values,
-#         'Actual_Closing_Price': test_df['target'].values,
-#         'Predicted_Closing_Price': predictions
-#     })
-    
-#     log_df.to_csv(config.PREDICTION_LOG_PATH, index=False)
-#     print(f"✓ Prediction log saved to {config.PREDICTION_LOG_PATH}")
-    
-#     return log_df
 
 def generate_prediction_log(test_df, predictions):
     """
     Generate prediction log CSV
+    predictions here are RETURNS (from pct_change target)
     """
     print("\n" + "="*60)
     print("📝 GENERATING PREDICTION LOG")
     print("="*60)
-    
+
     # Convert predicted return back to actual price
     predicted_prices = test_df['close'].values * (1 + predictions)
     actual_prices = test_df['close'].shift(-1).values  # actual next day close
@@ -157,11 +139,90 @@ def generate_prediction_log(test_df, predictions):
         'Actual_Closing_Price': actual_prices,
         'Predicted_Closing_Price': predicted_prices
     })
-    
+
     log_df.to_csv(config.PREDICTION_LOG_PATH, index=False)
     print(f"✓ Prediction log saved to {config.PREDICTION_LOG_PATH}")
     
     return log_df
+
+
+def run_backtest(combined_df, predictor, engineer):
+    """
+    Run backtesting simulation and print results
+    """
+    print("\n" + "="*60)
+    print("📊 BACKTESTING PHASE")
+    print("="*60)
+
+    backtester = Backtester(
+        initial_capital=10000,   # Start with $10,000
+        transaction_cost=0.001,  # 0.1% per trade (realistic broker cost)
+        threshold=0.005          # Only trade if model predicts > +0.5% or < -0.5%
+    )
+
+    metrics, portfolio_df, trade_log = backtester.run(
+        combined_df=combined_df,
+        predictor=predictor,
+        feature_columns=engineer.feature_columns,
+        test_size=config.TEST_SIZE
+    )
+
+    # ---- Print results ----
+    print("\n📈 BACKTEST RESULTS")
+    print("-" * 40)
+    print(f"  Confidence Threshold   : ±{metrics['Threshold_Used']*100:.2f}% (HOLD if inside band)")
+    print(f"  Initial Capital        : ${metrics['Initial_Capital']:,.2f}")
+    print(f"  Final Capital          : ${metrics['Final_Capital']:,.2f}")
+    print()
+    print(f"  Strategy Return        : {metrics['Strategy_Return_%']:+.2f}%")
+    print(f"  Buy & Hold Return      : {metrics['BuyHold_Return_%']:+.2f}%")
+    print(f"  Alpha (vs Buy & Hold)  : {metrics['Alpha_%']:+.2f}%")
+    print()
+    print(f"  Sharpe Ratio           : {metrics['Sharpe_Ratio']:.3f}")
+    print(f"  Max Drawdown           : -{metrics['Max_Drawdown_%']:.2f}%")
+    print()
+    print(f"  Total Trades           : {metrics['Total_Trades']}")
+    print(f"  Win Rate               : {metrics['Win_Rate_%']:.1f}%")
+    print(f"  Avg Win per Trade      : +{metrics['Avg_Win_%']:.2f}%")
+    print(f"  Avg Loss per Trade     : {metrics['Avg_Loss_%']:.2f}%")
+    print(f"  Profit Factor          : {metrics['Profit_Factor']:.3f}")
+    print("-" * 40)
+
+    # ---- Interpretation ----
+    print("\n💡 INTERPRETATION")
+    if metrics['Alpha_%'] > 0:
+        print(f"  ✅ Strategy BEAT buy & hold by {metrics['Alpha_%']:.2f}%")
+    else:
+        print(f"  ❌ Strategy UNDERPERFORMED buy & hold by {abs(metrics['Alpha_%']):.2f}%")
+
+    if metrics['Sharpe_Ratio'] > 1:
+        print(f"  ✅ Good risk-adjusted returns (Sharpe > 1)")
+    elif metrics['Sharpe_Ratio'] > 0:
+        print(f"  ⚠️  Positive but weak risk-adjusted returns (Sharpe < 1)")
+    else:
+        print(f"  ❌ Poor risk-adjusted returns (Sharpe < 0)")
+
+    if metrics['Max_Drawdown_%'] < 10:
+        print(f"  ✅ Low drawdown — strategy is relatively stable")
+    elif metrics['Max_Drawdown_%'] < 20:
+        print(f"  ⚠️  Moderate drawdown — some rough patches")
+    else:
+        print(f"  ❌ High drawdown ({metrics['Max_Drawdown_%']:.1f}%) — strategy had significant losing periods")
+
+    if metrics['Profit_Factor'] > 1.5:
+        print(f"  ✅ Strong profit factor — wins outweigh losses")
+    elif metrics['Profit_Factor'] > 1:
+        print(f"  ⚠️  Marginally profitable — slim edge")
+    else:
+        print(f"  ❌ Profit factor < 1 — losing more than winning")
+
+    # ---- Save backtest log ----
+    backtest_log_path = os.path.join(config.OUTPUT_DIR, "backtest_log.csv")
+    portfolio_df.to_csv(backtest_log_path, index=False)
+    print(f"\n✓ Backtest portfolio log saved to {backtest_log_path}")
+
+    return metrics, portfolio_df
+
 
 def save_processed_features(combined_df):
     """
@@ -169,6 +230,7 @@ def save_processed_features(combined_df):
     """
     combined_df.to_csv(config.FEATURE_CSV_PATH, index=False)
     print(f"✓ Processed features saved to {config.FEATURE_CSV_PATH}")
+
 
 def main():
     """
@@ -188,7 +250,6 @@ def main():
         
         # Step 1: Fetch all data
         stock_df, news_df, trends_df, reddit_df = fetch_all_data(
-
             config.STOCK_NAME,
             config.START_DATE,
             config.END_DATE
@@ -199,7 +260,6 @@ def main():
             stock_df, news_df, trends_df, reddit_df
         )
 
-        
         # Save processed features
         save_processed_features(combined_df)
         
@@ -210,24 +270,26 @@ def main():
         
         # Step 4: Generate prediction log
         log_df = generate_prediction_log(test_df, predictions)
+
+        # Step 5: Run backtest
+        backtest_metrics, portfolio_df = run_backtest(combined_df, predictor, engineer)
         
         # Final summary
         print("\n" + "="*60)
         print("✅ PIPELINE COMPLETED SUCCESSFULLY!")
         print("="*60)
+
         predicted_price = test_df['close'].values[-1] * (1 + predictions[-1])
         actual_price = test_df['close'].values[-1] * (1 + test_df['target'].values[-1])
-        print(f"\nNext day closing price prediction: ${predicted_price:.2f}")
-        print(f"Actual closing price: ${actual_price:.2f}")
-        print(f"Prediction error: ${abs(predicted_price - actual_price):.2f}")
-        # print(f"\nNext day closing price prediction: ${predictions[-1]:.2f}")
-        # print(f"Actual closing price: ${test_df['target'].values[-1]:.2f}")
-        # print(f"Prediction error: ${abs(predictions[-1] - test_df['target'].values[-1]):.2f}")
+        print(f"\nNext day closing price prediction : ${predicted_price:.2f}")
+        print(f"Actual closing price              : ${actual_price:.2f}")
+        print(f"Prediction error                  : ${abs(predicted_price - actual_price):.2f}")
         
         print("\n📁 Output files:")
         print(f"  - {config.FEATURE_CSV_PATH}")
         print(f"  - {config.PREDICTION_LOG_PATH}")
         print(f"  - {config.MODEL_PATH}")
+        print(f"  - {os.path.join(config.OUTPUT_DIR, 'backtest_log.csv')}")
         
         return True
         

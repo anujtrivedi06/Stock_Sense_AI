@@ -86,19 +86,26 @@ class FeatureEngineer:
         df = self.create_rolling_features(df, 'close', windows=[3, 7, 14])
 
         # ---- Target: NEXT DAY closing price ----
-        df['target'] = df['close'].shift(-1)
+        df['target'] = df['close'].pct_change(-1)
 
         # ---- Drop rows with NaNs from lagging/rolling ----
         df = df.dropna(subset=['target'])
 
-        df = df.fillna(0)
+        # df = df.fillna(0)
+        # Forward-fill price and technical columns, zero-fill sentiment
+        price_and_tech_cols = ['open', 'high', 'low', 'close', 'volume',
+                            'sma_5', 'sma_20', 'rsi', 'macd', 'signal_line', 
+                            'volatility', 'price_change',
+                            'close_rolling_mean_3', 'close_rolling_mean_7', 'close_rolling_mean_14',
+                            'close_rolling_std_3', 'close_rolling_std_7', 'close_rolling_std_14']
 
+        existing = [col for col in price_and_tech_cols if col in df.columns]
+        df[existing] = df[existing].ffill().bfill()
+        df = df.fillna(0)  # everything else (sentiment, lags, etc.) gets 0
 
-        # ---- Store final feature columns ----
-        self.feature_columns = [
-            col for col in df.columns
-            if col not in ['Date', 'target']
-        ]
+        # Instead of excluding just Date and target:
+        exclude = ['Date', 'target', 'close', 'open', 'high', 'low', 'volume']
+        self.feature_columns = [col for col in df.columns if col not in exclude]
 
         return df
 

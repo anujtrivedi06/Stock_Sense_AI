@@ -3,7 +3,7 @@
 News sentiment scraper using free sources
 Adds DATE stamps for proper temporal alignment
 """
-
+import config
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -35,7 +35,7 @@ class NewsScraper:
 
                 current_date = None
 
-                for row in rows[:50]:  # recent 50 headlines
+                for row in rows[:200]:  # recent 50 headlines
                     try:
                         headline = row.a.get_text()
                         time_info = row.td.text.strip()
@@ -86,7 +86,7 @@ class NewsScraper:
 
             headlines = soup.find_all('h3', class_='Mb(5px)')
 
-            for headline in headlines[:15]:
+            for headline in headlines[:30]:
                 try:
                     text = headline.get_text()
                     sentiment = self.analyzer.polarity_scores(text)
@@ -109,33 +109,79 @@ class NewsScraper:
 
         return pd.DataFrame(news_data)
 
+
+    def scrape_newsapi(self, ticker):
+        """
+        Fetch news from NewsAPI
+        """
+        url = "https://newsapi.org/v2/everything"
+
+        params = {
+            "q": ticker,
+            "sortBy": "publishedAt",
+            "language": "en",
+            "apiKey": config.NEWS_API_KEY,
+            "pageSize": 100
+        }
+
+        news_data = []
+
+        try:
+            response = requests.get(url, params=params)
+            data = response.json()
+
+            for article in data.get("articles", []):
+                title = article.get("title", "")
+                date = article.get("publishedAt", "")
+
+                sentiment = self.analyzer.polarity_scores(title)
+
+                news_data.append({
+                    "Date": pd.to_datetime(date).date(),
+                    "headline": title,
+                    "sentiment_score": sentiment["compound"],
+                    "positive": sentiment["pos"],
+                    "negative": sentiment["neg"],
+                    "neutral": sentiment["neu"]
+                })
+
+            print(f"✓ Scraped {len(news_data)} articles from NewsAPI")
+
+        except Exception as e:
+            print(f"Error NewsAPI: {e}")
+
+        return pd.DataFrame(news_data)
+
+
     def get_daily_sentiment(self, ticker):
-        """
-        Returns DAILY aggregated sentiment with Date column
-        """
+
+        finviz_df = self.scrape_finviz_news(ticker)
+        newsapi_df = self.scrape_newsapi(ticker)
+        yahoo_df = self.scrape_yahoo_news(ticker)
+
         all_news = []
+        
+        if not yahoo_df.empty:
+            all_news.append(yahoo_df)
 
-        finviz_news = self.scrape_finviz_news(ticker)
-        if not finviz_news.empty:
-            all_news.append(finviz_news)
+        if not finviz_df.empty:
+            all_news.append(finviz_df)
 
-        yahoo_news = self.scrape_yahoo_news(ticker)
-        if not yahoo_news.empty:
-            all_news.append(yahoo_news)
+        if not newsapi_df.empty:
+            all_news.append(newsapi_df)
 
         if not all_news:
             return pd.DataFrame()
 
-        combined = pd.concat(all_news, ignore_index=True)
-        combined = combined.dropna(subset=['Date'])
+        combined = pd.concat(all_news)
 
-        # Aggregate per day
-        daily_sentiment = combined.groupby('Date').agg(
-            avg_sentiment=('sentiment_score', 'mean'),
-            sentiment_std=('sentiment_score', 'std'),
-            positive_ratio=('sentiment_score', lambda x: (x > 0.05).mean()),
-            negative_ratio=('sentiment_score', lambda x: (x < -0.05).mean()),
-            news_volume=('headline', 'count')
-        ).reset_index()
+        combined["Date"] = pd.to_datetime(combined["Date"])
 
-        return daily_sentiment
+        daily = combined.groupby("Date").agg({
+            "sentiment_score": ["mean", "std", "count"]
+        }).reset_index()
+
+        daily.columns = ["Date", "avg_sentiment", "sentiment_std", "news_volume"]
+
+        return daily
+
