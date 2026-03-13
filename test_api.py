@@ -109,8 +109,10 @@ def summarize_content(content: dict, ticker: str) -> dict:
     """
    
 
-
-    client = InferenceClient(api_key="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")
+    API_KEY = os.getenv("HF_TOKEN")
+    if not API_KEY:
+        print("Warning: HF_TOKEN not set. Summarization will fail.")
+    client = InferenceClient(api_key=API_KEY)
     summaries = {}
 
     for source, texts in content.items():
