@@ -10,7 +10,7 @@ load_dotenv()  # Load environment variables from .env file
 
 
 # Stock Configuration
-STOCK_NAME = "GOOG"  
+STOCK_NAME = "DIS"  
 START_DATE = "2021-01-16"
 END_DATE = "2026-02-26"
 
