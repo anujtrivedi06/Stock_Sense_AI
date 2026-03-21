@@ -34,11 +34,11 @@ class StockScraper:
             df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
 
             
-            print(f"✓ Fetched {len(df)} days of stock data")
+            print(f"✓ Fetched {len(df)} days of stock data for {self.ticker}")
             return df
             
         except Exception as e:
-            print(f"✗ Error fetching stock data: {e}")
+            print(f"✗ Error fetching stock data for {self.ticker}: {e}")
             return pd.DataFrame()
     
     def calculate_technical_indicators(self, df):

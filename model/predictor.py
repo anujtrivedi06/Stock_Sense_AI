@@ -16,9 +16,34 @@ class StockPredictor:
     def __init__(self):
         self.scaler = StandardScaler()
         self.models = {
-            'rf': RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1, max_depth=5, min_samples_split=10),
-            'gb': GradientBoostingRegressor(n_estimators=50, random_state=42, learning_rate=0.05, max_depth=3),
-            'xgb': XGBRegressor(n_estimators=50, random_state=42, n_jobs=-1, learning_rate=0.05, max_depth=3)
+            'rf': RandomForestRegressor(
+                n_estimators=200,
+                random_state=42,
+                n_jobs=-1,
+                max_depth=4,            # shallower = less overfitting
+                min_samples_split=20,   # needs more samples to split a node
+                min_samples_leaf=10,    # leaf must have at least 10 samples
+                max_features=0.6,       # only 60% of features per split
+            ),
+            'gb': GradientBoostingRegressor(
+                n_estimators=200,
+                random_state=42,
+                learning_rate=0.02,     # slower learning = more generalisation
+                max_depth=2,            # very shallow: forces simple patterns only
+                subsample=0.8,          # each tree sees 80% of data
+                min_samples_leaf=10,
+            ),
+            'xgb': XGBRegressor(
+                n_estimators=200,
+                random_state=42,
+                n_jobs=-1,
+                learning_rate=0.02,
+                max_depth=2,
+                subsample=0.8,
+                colsample_bytree=0.7,   # each tree sees 70% of features
+                reg_alpha=0.1,          # L1: pushes weak feature weights to 0
+                reg_lambda=2.0,         # L2: penalises large weights
+            )
         }
         self.weights = {'rf': 0.3, 'gb': 0.3, 'xgb': 0.4}
         self.is_trained = False

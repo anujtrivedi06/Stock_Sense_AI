@@ -24,7 +24,11 @@ from data_scrapers.trends_scraper2 import TrendsScraper
 from data_scrapers.reddit_scraper2 import RedditScraper
 from features.feature_engineering import FeatureEngineer
 from model.predictor import StockPredictor
+from model.general_predictor import GeneralPredictor
 import config
+
+GENERAL_MODEL_PATH = getattr(config, 'GENERAL_MODEL_PATH',
+                              'outputs/models/general_model.pkl')
 
 
 FEATURE_DIR = "outputs/features"
@@ -320,113 +324,141 @@ with st.sidebar:
 
 
 # -------------------- Core Pipeline --------------------
-def run_pipeline(stock_name, start_date, end_date, force_retrain=False):
+@st.cache_resource
+def load_general_model():
+    """Load the general model once and cache for the entire session."""
+    gp = GeneralPredictor()
+    if gp.is_available(GENERAL_MODEL_PATH):
+        gp.load_model(GENERAL_MODEL_PATH)
+        return gp
+    return None
 
-    model_path   = get_model_path(stock_name)
-    feature_path = get_feature_path(stock_name)
 
-    predictor = StockPredictor()
-    engineer  = FeatureEngineer()
-
-    # -------- USE CACHE --------
-    if os.path.exists(model_path) and os.path.exists(feature_path) and not force_retrain:
-
-        predictor.load_model(model_path)
-
-        combined_df = pd.read_csv(feature_path)
-        combined_df["Date"] = pd.to_datetime(combined_df["Date"])
-
-        exclude = ['Date', 'target', 'date', 'close', 'open', 'high', 'low', 'volume']
-        engineer.feature_columns = [
-            col for col in combined_df.columns if col not in exclude
-        ]
-
-        X_train, X_test, y_train, y_test, test_df = engineer.prepare_train_test_split(
-            combined_df, test_size=config.TEST_SIZE
-        )
-
-        test_returns     = predictor.predict(X_test)
-        test_predictions = test_df['close'].values * (1 + test_returns)
-
-        all_features    = combined_df[engineer.feature_columns]
-        all_returns     = predictor.predict(all_features)
-        all_predictions = combined_df['close'].values * (1 + all_returns)
-
-        latest_features   = combined_df[engineer.feature_columns].iloc[-1:]
-        latest_return     = predictor.predict(latest_features)[0]
-        current_price     = combined_df["close"].iloc[-1]
-        latest_prediction = current_price * (1 + latest_return)
-        stock_df          = combined_df.copy()
-
-        return (latest_prediction, current_price, stock_df, combined_df,
-                test_df, test_predictions, all_predictions, predictor, engineer, "cached")
-
-    # -------- FULL PIPELINE --------
-    stock_scraper = StockScraper(stock_name)
-    stock_df      = stock_scraper.fetch_historical_data(start_date, end_date)
-    stock_df      = stock_scraper.calculate_technical_indicators(stock_df)
-
-    # Fetch news, trends, and Reddit in parallel
+def _fetch_sentiment(stock_name, start_date, end_date):
+    """Fetch news, trends, reddit in parallel. Returns dict of DataFrames."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    company_map = {
-        'TSLA': 'Tesla', 'AAPL': 'Apple', 'GOOGL': 'Google',
-        'MSFT': 'Microsoft', 'AMZN': 'Amazon'
-    }
+    company_map = getattr(config, 'COMPANY_ALIASES', {})
 
     def fetch_news():
         return NewsScraper().get_daily_sentiment(stock_name)
-
     def fetch_trends():
-        scraper = TrendsScraper()
-        df = scraper.get_search_trends(stock_name, start_date, end_date)
+        s  = TrendsScraper()
+        df = s.get_search_trends(stock_name, start_date, end_date)
         if df.empty and stock_name in company_map:
-            df = scraper.get_search_trends(company_map[stock_name], start_date, end_date)
+            df = s.get_search_trends(company_map[stock_name], start_date, end_date)
         return df
-
     def fetch_reddit():
         return RedditScraper().get_daily_reddit_sentiment(stock_name)
 
-    sentiment_tasks = {'news': fetch_news, 'trends': fetch_trends, 'reddit': fetch_reddit}
-    sentiment_results = {}
+    result = {}
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(fn): name for name, fn in [
+            ('news', fetch_news), ('trends', fetch_trends), ('reddit', fetch_reddit)
+        ]}
+        for f in as_completed(futs):
+            name = futs[f]
+            try:    result[name] = f.result()
+            except: result[name] = pd.DataFrame()
+    return result
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {executor.submit(fn): name for name, fn in sentiment_tasks.items()}
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                sentiment_results[name] = future.result()
-            except Exception as e:
-                sentiment_results[name] = pd.DataFrame()
 
-    news_df   = sentiment_results.get('news',   pd.DataFrame())
-    trends_df = sentiment_results.get('trends', pd.DataFrame())
-    reddit_df = sentiment_results.get('reddit', pd.DataFrame())
+def run_pipeline(stock_name, start_date, end_date, force_retrain=False):
+    """
+    Prediction pipeline — uses general model by default.
 
-    combined_df = engineer.combine_all_features(stock_df, news_df, trends_df, reddit_df)
-    combined_df.to_csv(feature_path, index=False)
+    Priority order:
+      1. General model  → instant, no training needed
+      2. Per-stock cache → fast if cache exists
+      3. Per-stock train → slowest fallback
+    """
+    general_model = load_general_model()
 
-    X_train, X_test, y_train, y_test, test_df = engineer.prepare_train_test_split(
-        combined_df, test_size=config.TEST_SIZE
+    if general_model is not None and not force_retrain:
+        # ── General model path ────────────────────────────────────────
+        stock_scraper = StockScraper(stock_name)
+        stock_df      = stock_scraper.fetch_historical_data(start_date, end_date)
+        stock_df      = stock_scraper.calculate_technical_indicators(stock_df)
+
+        sentiment   = _fetch_sentiment(stock_name, start_date, end_date)
+        engineer    = FeatureEngineer()
+        combined_df = engineer.combine_all_features(
+            stock_df,
+            sentiment.get('news',   pd.DataFrame()),
+            sentiment.get('trends', pd.DataFrame()),
+            sentiment.get('reddit', pd.DataFrame()),
+        )
+
+        # Align to general model's feature columns
+        feature_columns = general_model.feature_columns
+        for col in feature_columns:
+            if col not in combined_df.columns:
+                combined_df[col] = 0.0
+        engineer.feature_columns = feature_columns
+
+        split_idx        = int(len(combined_df) * (1 - config.TEST_SIZE))
+        test_df          = combined_df.iloc[split_idx:].copy().reset_index(drop=True)
+        test_returns     = general_model.predict(test_df[feature_columns])
+        test_predictions = test_df['close'].values * (1 + test_returns)
+        all_returns      = general_model.predict(combined_df[feature_columns])
+        all_predictions  = combined_df['close'].values * (1 + all_returns)
+        latest_return    = general_model.predict(combined_df[feature_columns].iloc[-1:])[0]
+        current_price    = combined_df['close'].iloc[-1]
+
+        combined_df.to_csv(get_feature_path(stock_name), index=False)
+
+        return (current_price * (1 + latest_return), current_price,
+                stock_df, combined_df, test_df, test_predictions,
+                all_predictions, general_model, engineer, "general_model")
+
+    # ── Per-stock fallback ────────────────────────────────────────────
+    model_path   = get_model_path(stock_name)
+    feature_path = get_feature_path(stock_name)
+    predictor    = StockPredictor()
+    engineer     = FeatureEngineer()
+
+    if os.path.exists(model_path) and os.path.exists(feature_path) and not force_retrain:
+        predictor.load_model(model_path)
+        combined_df = pd.read_csv(feature_path)
+        combined_df["Date"] = pd.to_datetime(combined_df["Date"])
+        exclude = ['Date', 'target', 'date', 'close', 'open', 'high', 'low', 'volume']
+        engineer.feature_columns = [c for c in combined_df.columns if c not in exclude]
+        _, X_test, _, _, test_df = engineer.prepare_train_test_split(
+            combined_df, test_size=config.TEST_SIZE)
+        test_returns     = predictor.predict(X_test)
+        test_predictions = test_df['close'].values * (1 + test_returns)
+        all_returns      = predictor.predict(combined_df[engineer.feature_columns])
+        all_predictions  = combined_df['close'].values * (1 + all_returns)
+        latest_return    = predictor.predict(combined_df[engineer.feature_columns].iloc[-1:])[0]
+        current_price    = combined_df["close"].iloc[-1]
+        return (current_price * (1 + latest_return), current_price,
+                combined_df.copy(), combined_df, test_df, test_predictions,
+                all_predictions, predictor, engineer, "cached")
+
+    # Fresh per-stock training
+    stock_scraper = StockScraper(stock_name)
+    stock_df      = stock_scraper.fetch_historical_data(start_date, end_date)
+    stock_df      = stock_scraper.calculate_technical_indicators(stock_df)
+    sentiment     = _fetch_sentiment(stock_name, start_date, end_date)
+    combined_df   = engineer.combine_all_features(
+        stock_df,
+        sentiment.get('news',   pd.DataFrame()),
+        sentiment.get('trends', pd.DataFrame()),
+        sentiment.get('reddit', pd.DataFrame()),
     )
-
+    combined_df.to_csv(feature_path, index=False)
+    X_train, X_test, y_train, y_test, test_df = engineer.prepare_train_test_split(
+        combined_df, test_size=config.TEST_SIZE)
     predictor.train(X_train, y_train)
     predictor.save_model(model_path)
-
     test_returns     = predictor.predict(X_test)
     test_predictions = test_df['close'].values * (1 + test_returns)
-
-    all_features    = combined_df[engineer.feature_columns]
-    all_returns     = predictor.predict(all_features)
-    all_predictions = combined_df['close'].values * (1 + all_returns)
-
-    latest_features   = combined_df[engineer.feature_columns].iloc[-1:]
-    latest_return     = predictor.predict(latest_features)[0]
-    current_price     = stock_df['close'].iloc[-1]
-    latest_prediction = current_price * (1 + latest_return)
-
-    return (latest_prediction, current_price, stock_df, combined_df,
-            test_df, test_predictions, all_predictions, predictor, engineer, "trained")
+    all_returns      = predictor.predict(combined_df[engineer.feature_columns])
+    all_predictions  = combined_df['close'].values * (1 + all_returns)
+    latest_return    = predictor.predict(combined_df[engineer.feature_columns].iloc[-1:])[0]
+    current_price    = stock_df['close'].iloc[-1]
+    return (current_price * (1 + latest_return), current_price,
+            stock_df, combined_df, test_df, test_predictions,
+            all_predictions, predictor, engineer, "trained")
 
 
 # -------------------- Martingale Display Helper --------------------
@@ -873,8 +905,8 @@ if train_button:
                         'status':          status,
                     }
 
-                    status_emoji = "✅" if status == "cached" else "🔄"
-                    status_text  = "Using cached model" if status == "cached" else "Trained new model"
+                    status_emoji = {"cached": "✅", "general_model": "🌍", "trained": "🔄"}.get(status, "🔄")
+                    status_text  = {"cached": "Using cached model", "general_model": "Using general model", "trained": "Trained new model"}.get(status, status)
                     st.markdown(
                         f"<p style='color: #1a1a1a; background-color: #e8f5e9; padding: 12px; "
                         f"border-radius: 8px; border-left: 4px solid #4CAF50;'>"

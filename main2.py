@@ -10,7 +10,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -30,67 +29,48 @@ def create_output_dir():
 
 def fetch_all_data(stock_name, start_date, end_date):
     """
-    Fetch all data sources.
-    Stock data is fetched first (required). News, Trends, and Reddit
-    are then fetched in parallel — cutting total wait time by ~60-70%.
+    Fetch all data sources
     """
     print("="*60)
     print("📥 DATA COLLECTION PHASE")
     print("="*60)
-
-    # ── Step 1: Stock data (must complete before feature engineering) ──
+    
+    # 1. Stock Data
     stock_scraper = StockScraper(stock_name)
     stock_df = stock_scraper.fetch_historical_data(start_date, end_date)
-
+    
     if stock_df.empty:
         raise ValueError("Failed to fetch stock data!")
-
+    
+    # Add technical indicators
     stock_df = stock_scraper.calculate_technical_indicators(stock_df)
+    
+    # 2. News Sentiment (DAILY, DATE-ALIGNED)
+    news_scraper = NewsScraper()
+    news_df = news_scraper.get_daily_sentiment(stock_name)
 
-    # ── Step 2: Sentiment sources — run in parallel ──────────────────
-    company_map = {
-        'TSLA': 'Tesla', 'AAPL': 'Apple', 'GOOGL': 'Google',
-        'MSFT': 'Microsoft', 'AMZN': 'Amazon'
-    }
+    # 3. Google Trends
+    trends_scraper = TrendsScraper()
+    trends_df = trends_scraper.get_search_trends(stock_name, start_date, end_date)
 
-    def fetch_news():
-        scraper = NewsScraper()
-        return scraper.get_daily_sentiment(stock_name)
+    if trends_df.empty:
+        company_map = {
+            'TSLA': 'Tesla',
+            'AAPL': 'Apple',
+            'GOOGL': 'Google',
+            'MSFT': 'Microsoft',
+            'AMZN': 'Amazon'
+        }
+        if stock_name in company_map:
+            trends_df = trends_scraper.get_search_trends(
+                company_map[stock_name], start_date, end_date
+            )
 
-    def fetch_trends():
-        scraper = TrendsScraper()
-        df = scraper.get_search_trends(stock_name, start_date, end_date)
-        # Fallback to company name if ticker search returns nothing
-        if df.empty and stock_name in company_map:
-            print(f"↩ Trends fallback: trying '{company_map[stock_name]}'")
-            df = scraper.get_search_trends(company_map[stock_name], start_date, end_date)
-        return df
+    # 4. Reddit Sentiment (DAILY, DATE-ALIGNED)
+    reddit_scraper = RedditScraper()
+    reddit_df = reddit_scraper.get_daily_reddit_sentiment(stock_name)
 
-    def fetch_reddit():
-        scraper = RedditScraper()
-        return scraper.get_daily_reddit_sentiment(stock_name)
-
-    tasks = {
-        'news':   fetch_news,
-        'trends': fetch_trends,
-        'reddit': fetch_reddit,
-    }
-
-    results = {}
-    print("⚡ Fetching news, trends, and Reddit in parallel...")
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {executor.submit(fn): name for name, fn in tasks.items()}
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                results[name] = future.result()
-                print(f"  ✓ {name.capitalize()} done")
-            except Exception as e:
-                print(f"  ✗ {name.capitalize()} failed: {e}")
-                results[name] = pd.DataFrame()
-
-    return stock_df, results['news'], results['trends'], results['reddit']
+    return stock_df, news_df, trends_df, reddit_df
 
 
 def engineer_features(stock_df, news_df, trends_df, reddit_df):
@@ -174,10 +154,18 @@ def run_backtest(combined_df, predictor, engineer):
     print("📊 BACKTESTING PHASE")
     print("="*60)
 
+    from stop_loss import make_stop_loss_config
+    sl_config = make_stop_loss_config(
+        mode="trailing",        # trailing stop: lets winners run, cuts losers
+        trailing_pct=0.03,      # trail 3% below peak price
+        hard_floor_pct=0.05,    # never lose more than 5% from entry no matter what
+    )
+
     backtester = Backtester(
-        initial_capital=10000,   # Start with $10,000
-        transaction_cost=0.001,  # 0.1% per trade (realistic broker cost)
-        threshold=0.005          # Only trade if model predicts > +0.5% or < -0.5%
+        initial_capital=10000,
+        transaction_cost=0.001,
+        threshold=0.005,
+        sl_config=sl_config,
     )
 
     metrics, portfolio_df, trade_log = backtester.run(
@@ -191,6 +179,7 @@ def run_backtest(combined_df, predictor, engineer):
     print("\n📈 BACKTEST RESULTS")
     print("-" * 40)
     print(f"  Confidence Threshold   : ±{metrics['Threshold_Used']*100:.2f}% (HOLD if inside band)")
+    print(f"  Stop Loss Mode         : {metrics['Stop_Mode']}")
     print(f"  Initial Capital        : ${metrics['Initial_Capital']:,.2f}")
     print(f"  Final Capital          : ${metrics['Final_Capital']:,.2f}")
     print()
@@ -202,6 +191,9 @@ def run_backtest(combined_df, predictor, engineer):
     print(f"  Max Drawdown           : -{metrics['Max_Drawdown_%']:.2f}%")
     print()
     print(f"  Total Trades           : {metrics['Total_Trades']}")
+    print(f"    → ML Exits           : {metrics['ML_Exits']}")
+    print(f"    → Stop Loss Exits    : {metrics['Stop_Exits']}")
+    print(f"    → Final Day Exits    : {metrics['Final_Exits']}")
     print(f"  Win Rate               : {metrics['Win_Rate_%']:.1f}%")
     print(f"  Avg Win per Trade      : +{metrics['Avg_Win_%']:.2f}%")
     print(f"  Avg Loss per Trade     : {metrics['Avg_Loss_%']:.2f}%")

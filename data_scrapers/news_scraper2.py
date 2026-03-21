@@ -1,26 +1,34 @@
-# data_scrapers/news_scraper.py
-"""
-News sentiment scraper using free sources
-Adds DATE stamps for proper temporal alignment
-"""
 import config
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import yfinance as yf
 
 
 class NewsScraper:
     def __init__(self):
         self.analyzer = SentimentIntensityAnalyzer()
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            # A real browser UA reduces FinViz block rate
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            )
         }
 
+    # ------------------------------------------------------------------ #
+    #  SOURCE 1 — FinViz                                                   #
+    # ------------------------------------------------------------------ #
     def scrape_finviz_news(self, ticker):
         """
-        Scrape news from FinViz with DATE information
+        Scrape FinViz headlines with proper date carry-forward.
+        Bumped to 500 rows (was 200) to capture ~3-4 weeks of history.
+        Added a hard fallback so a bad date row doesn't reset current_date
+        to None and corrupt subsequent rows.
         """
         url = f"https://finviz.com/quote.ashx?t={ticker}"
         news_data = []
@@ -30,158 +38,247 @@ class NewsScraper:
             soup = BeautifulSoup(response.content, 'html.parser')
 
             news_table = soup.find(id='news-table')
-            if news_table:
-                rows = news_table.findAll('tr')
+            if not news_table:
+                print(f"✗ FinViz: news table not found (possible block or ticker error) for {ticker}")
+                return pd.DataFrame()
 
-                current_date = None
+            rows = news_table.findAll('tr')
+            current_date = None
 
-                for row in rows[:200]:  # recent 50 headlines
-                    try:
-                        headline = row.a.get_text()
-                        time_info = row.td.text.strip()
-
-                        # FinViz format:
-                        # Either: "Jul-01-24 09:15AM"
-                        # Or:     "09:15AM" (same date as previous row)
-                        if len(time_info.split()) == 2:
-                            date_str, time_str = time_info.split()
-                            current_date = datetime.strptime(date_str, "%b-%d-%y").date()
-                        else:
-                            time_str = time_info
-
-                        sentiment = self.analyzer.polarity_scores(headline)
-
-                        news_data.append({
-                            'Date': current_date,
-                            'headline': headline,
-                            'sentiment_score': sentiment['compound'],
-                            'positive': sentiment['pos'],
-                            'negative': sentiment['neg'],
-                            'neutral': sentiment['neu']
-                        })
-
-                    except Exception:
-                        continue
-
-            print(f"✓ Scraped {len(news_data)} news articles from FinViz")
-
-        except Exception as e:
-            print(f"✗ Error scraping FinViz: {e}")
-
-        return pd.DataFrame(news_data)
-
-    def scrape_yahoo_news(self, ticker):
-        """
-        Scrape news from Yahoo Finance
-        Yahoo does not expose reliable timestamps,
-        so we assign CURRENT DATE
-        """
-        url = f"https://finance.yahoo.com/quote/{ticker}/news"
-        news_data = []
-        today = datetime.now().date()
-
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            headlines = soup.find_all('h3', class_='Mb(5px)')
-
-            for headline in headlines[:30]:
+            for row in rows[:500]:
                 try:
-                    text = headline.get_text()
-                    sentiment = self.analyzer.polarity_scores(text)
+                    headline = row.a.get_text(strip=True)
+                    time_info = row.td.text.strip()
 
+                    parts = time_info.split()
+                    if len(parts) == 2:
+                        # Format: "Jul-01-24 09:15AM"
+                        try:
+                            current_date = datetime.strptime(parts[0], "%b-%d-%y").date()
+                        except ValueError:
+                            pass  # keep previous current_date rather than setting None
+                    # else: time-only row, reuse current_date as-is
+
+                    if current_date is None:
+                        continue  # skip rows before we've seen any date
+
+                    sentiment = self.analyzer.polarity_scores(headline)
                     news_data.append({
-                        'Date': today,
-                        'headline': text,
+                        'Date':            current_date,
+                        'headline':        headline,
                         'sentiment_score': sentiment['compound'],
-                        'positive': sentiment['pos'],
-                        'negative': sentiment['neg'],
-                        'neutral': sentiment['neu']
+                        'positive':        sentiment['pos'],
+                        'negative':        sentiment['neg'],
+                        'neutral':         sentiment['neu'],
                     })
+
                 except Exception:
                     continue
 
-            print(f"✓ Scraped {len(news_data)} news articles from Yahoo Finance")
+            print(f"✓ FinViz: {len(news_data)} headlines for {ticker}")
 
         except Exception as e:
-            print(f"✗ Error scraping Yahoo Finance: {e}")
+            print(f"✗ FinViz error for {ticker}: {e}")
 
         return pd.DataFrame(news_data)
 
-
+    # ------------------------------------------------------------------ #
+    #  SOURCE 2 — NewsAPI  (replaces broken Yahoo scraper)                #
+    # ------------------------------------------------------------------ #
     def scrape_newsapi(self, ticker):
         """
-        Fetch news from NewsAPI
+        NewsAPI free tier: up to 100 articles per request, 30-day window.
+        We now page through 3 pages (300 articles) and also search the
+        company alias so we don't miss articles that use the full name.
+        Falls back gracefully if the API key is missing/invalid.
         """
-        url = "https://newsapi.org/v2/everything"
+        api_key = getattr(config, 'NEWS_API_KEY', None)
+        if not api_key:
+            print("✗ NewsAPI: no API key in config")
+            return pd.DataFrame()
 
+        # alias   = COMPANY_ALIASES.get(ticker.upper(), ticker)
+        # Search both ticker symbol AND company name for better coverage
+        # Ticker → full company name used as a fallback search term
+        stock_details = yf.Ticker(ticker)
+        info = stock_details.info
+        company_name = (
+            info.get('displayName') or
+            info.get('shortName') or
+            info.get('longName') or
+            ticker
+        )
+        query   = f"{ticker} OR {company_name}" if company_name != ticker else ticker
+        url     = "https://newsapi.org/v2/everything"
+        news_data = []
+
+        for page in range(1, 4):          # pages 1, 2, 3 → up to 300 articles
+            params = {
+                "q":        query,
+                "sortBy":   "publishedAt",
+                "language": "en",
+                "apiKey":   api_key,
+                "pageSize": 100,
+                "page":     page,
+            }
+            try:
+                resp = requests.get(url, params=params, timeout=10)
+                data = resp.json()
+
+                articles = data.get("articles", [])
+                if not articles:
+                    break   # no more pages
+
+                for article in articles:
+                    title = (article.get("title") or "").strip()
+                    if not title or title == "[Removed]":
+                        continue
+                    pub_date = article.get("publishedAt", "")
+                    try:
+                        date = pd.to_datetime(pub_date).date()
+                    except Exception:
+                        continue
+
+                    sentiment = self.analyzer.polarity_scores(title)
+                    news_data.append({
+                        "Date":            date,
+                        "headline":        title,
+                        "sentiment_score": sentiment["compound"],
+                        "positive":        sentiment["pos"],
+                        "negative":        sentiment["neg"],
+                        "neutral":         sentiment["neu"],
+                    })
+
+            except Exception as e:
+                print(f"✗ NewsAPI page {page} error: {e}")
+                break
+
+        print(f"✓ NewsAPI: {len(news_data)} articles ({query})")
+        return pd.DataFrame(news_data)
+
+    # ------------------------------------------------------------------ #
+    #  SOURCE 3 — AlphaVantage News  (replaces broken Yahoo scraper)      #
+    # ------------------------------------------------------------------ #
+    def scrape_alphavantage_news(self, ticker):
+        """
+        AlphaVantage News & Sentiment endpoint (free tier, 25 req/day).
+        Returns up to 1000 articles with proper timestamps and topics.
+
+        Free key: https://www.alphavantage.co/support/#api-key
+        Add AV_API_KEY to your config.py
+        """
+        api_key = getattr(config, 'AV_API_KEY', None)
+        if not api_key:
+            print("✗ AlphaVantage: no AV_API_KEY in config — skipping")
+            return pd.DataFrame()
+
+        url = "https://www.alphavantage.co/query"
         params = {
-            "q": ticker,
-            "sortBy": "publishedAt",
-            "language": "en",
-            "apiKey": config.NEWS_API_KEY,
-            "pageSize": 100
+            "function":  "NEWS_SENTIMENT",
+            "tickers":   ticker,
+            "limit":     1000,
+            "apikey":    api_key,
         }
 
         news_data = []
-
         try:
-            response = requests.get(url, params=params)
-            data = response.json()
+            resp = requests.get(url, params=params, timeout=15)
+            data = resp.json()
 
-            for article in data.get("articles", []):
-                title = article.get("title", "")
-                date = article.get("publishedAt", "")
+            for item in data.get("feed", []):
+                time_published = item.get("time_published", "")
+                # Format: "20240101T093000"
+                try:
+                    date = datetime.strptime(time_published[:8], "%Y%m%d").date()
+                except Exception:
+                    continue
 
-                sentiment = self.analyzer.polarity_scores(title)
+                title = (item.get("title") or "").strip()
+                if not title:
+                    continue
+
+                # AlphaVantage gives us a pre-computed relevance score per ticker
+                ticker_sentiment = 0.0
+                for ts in item.get("ticker_sentiment", []):
+                    if ts.get("ticker", "").upper() == ticker.upper():
+                        try:
+                            ticker_sentiment = float(ts.get("ticker_sentiment_score", 0))
+                        except Exception:
+                            pass
+                        break
+
+                # Use VADER on title as well, then average with AV score
+                vader = self.analyzer.polarity_scores(title)
+                blended = (vader['compound'] + ticker_sentiment) / 2
 
                 news_data.append({
-                    "Date": pd.to_datetime(date).date(),
-                    "headline": title,
-                    "sentiment_score": sentiment["compound"],
-                    "positive": sentiment["pos"],
-                    "negative": sentiment["neg"],
-                    "neutral": sentiment["neu"]
+                    "Date":            date,
+                    "headline":        title,
+                    "sentiment_score": blended,
+                    "positive":        vader['pos'],
+                    "negative":        vader['neg'],
+                    "neutral":         vader['neu'],
                 })
 
-            print(f"✓ Scraped {len(news_data)} articles from NewsAPI")
+            print(f"✓ AlphaVantage: {len(news_data)} articles")
 
         except Exception as e:
-            print(f"Error NewsAPI: {e}")
+            print(f"✗ AlphaVantage error: {e}")
 
         return pd.DataFrame(news_data)
 
-
+    # ------------------------------------------------------------------ #
+    #  AGGREGATOR                                                          #
+    # ------------------------------------------------------------------ #
     def get_daily_sentiment(self, ticker):
+        """
+        Fetch all sources in parallel, combine, and return a daily
+        aggregated DataFrame.
 
-        finviz_df = self.scrape_finviz_news(ticker)
-        newsapi_df = self.scrape_newsapi(ticker)
-        yahoo_df = self.scrape_yahoo_news(ticker)
+        New columns vs original:
+          - positive_ratio  : fraction of articles with compound > +0.05
+          - negative_ratio  : fraction of articles with compound < -0.05
+          (feature_engineering.py already referenced these but original
+           code never produced them — they were silently zeroed out)
+        """
+        tasks = {
+            'finviz':       lambda: self.scrape_finviz_news(ticker),
+            'newsapi':      lambda: self.scrape_newsapi(ticker),
+            'alphavantage': lambda: self.scrape_alphavantage_news(ticker),
+        }
 
         all_news = []
-        
-        if not yahoo_df.empty:
-            all_news.append(yahoo_df)
-
-        if not finviz_df.empty:
-            all_news.append(finviz_df)
-
-        if not newsapi_df.empty:
-            all_news.append(newsapi_df)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(fn): name for name, fn in tasks.items()}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    df = future.result()
+                    if not df.empty:
+                        all_news.append(df)
+                except Exception as e:
+                    print(f"✗ {name} thread error: {e}")
 
         if not all_news:
+            print(f"⚠ No news data retrieved for any source for {ticker}")
             return pd.DataFrame()
 
-        combined = pd.concat(all_news)
-
+        combined = pd.concat(all_news, ignore_index=True)
         combined["Date"] = pd.to_datetime(combined["Date"])
 
-        daily = combined.groupby("Date").agg({
-            "sentiment_score": ["mean", "std", "count"]
-        }).reset_index()
+        # Drop exact duplicate headlines on the same date (cross-source overlap)
+        combined = combined.drop_duplicates(subset=["Date", "headline"])
 
-        daily.columns = ["Date", "avg_sentiment", "sentiment_std", "news_volume"]
+        daily = combined.groupby("Date").agg(
+            avg_sentiment    = ("sentiment_score", "mean"),
+            sentiment_std    = ("sentiment_score", "std"),
+            news_volume      = ("sentiment_score", "count"),
+            positive_ratio   = ("sentiment_score", lambda x: (x > 0.05).mean()),
+            negative_ratio   = ("sentiment_score", lambda x: (x < -0.05).mean()),
+        ).reset_index()
 
+        daily["sentiment_std"] = daily["sentiment_std"].fillna(0)
+
+        print(f"✓ News: {len(daily)} daily rows across "
+              f"{(daily['Date'].max() - daily['Date'].min()).days} days")
         return daily
-
