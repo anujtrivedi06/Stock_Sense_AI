@@ -228,6 +228,84 @@ class NewsScraper:
         return pd.DataFrame(news_data)
 
     # ------------------------------------------------------------------ #
+    #  SOURCE 4 — Moneycontrol News  (For Indian Stocks)      #
+    # ------------------------------------------------------------------ #
+    def scrape_moneycontrol(self, ticker):
+        """
+        Moneycontrol is the most widely read Indian financial news source.
+        Strip .NS or .BO suffix before searching.
+        """
+        clean_ticker = ticker.replace('.NS', '').replace('.BO', '')
+        url = f"https://www.moneycontrol.com/stocks/cmsedition/rss/{clean_ticker}_news.xml"
+        news_data = []
+        try:
+            response = requests.get(url, headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.content, 'xml')
+            for item in soup.find_all('item')[:100]:
+                title = item.find('title')
+                pub_date = item.find('pubDate')
+                if not title or not pub_date:
+                    continue
+                try:
+                    date = pd.to_datetime(pub_date.get_text()).date()
+                except Exception:
+                    continue
+                sentiment = self.analyzer.polarity_scores(title.get_text())
+                news_data.append({
+                    'Date': date,
+                    'headline': title.get_text(),
+                    'sentiment_score': sentiment['compound'],
+                    'positive': sentiment['pos'],
+                    'negative': sentiment['neg'],
+                    'neutral': sentiment['neu'],
+                })
+            print(f"✓ Moneycontrol: {len(news_data)} articles for {ticker}")
+        except Exception as e:
+            print(f"✗ Moneycontrol error for {ticker}: {e}")
+        return pd.DataFrame(news_data)
+
+    # ------------------------------------------------------------------ #
+    #  SOURCE 5 — Economic Times News  (For Indian Stocks)      #
+    # ------------------------------------------------------------------ #
+    def scrape_economic_times(self, ticker):
+        """
+        Economic Times RSS feed — covers NSE/BSE stocks well.
+        """
+        clean_ticker = ticker.replace('.NS', '').replace('.BO', '')
+        url = f"https://economictimes.indiatimes.com/rssfeedsdefault.cms"
+        # ET doesn't have per-ticker RSS so we search their site
+        search_url = f"https://economictimes.indiatimes.com/searchresult.cms?query={clean_ticker}"
+        news_data = []
+        try:
+            response = requests.get(search_url, headers=self.headers, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            articles = soup.find_all('div', class_='eachStory')[:50]
+            for article in articles:
+                title_tag = article.find('h3') or article.find('h4')
+                date_tag  = article.find('time')
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(strip=True)
+                try:
+                    date = pd.to_datetime(date_tag['datetime']).date() if date_tag else datetime.today().date()
+                except Exception:
+                    date = datetime.today().date()
+                sentiment = self.analyzer.polarity_scores(title)
+                news_data.append({
+                    'Date': date,
+                    'headline': title,
+                    'sentiment_score': sentiment['compound'],
+                    'positive': sentiment['pos'],
+                    'negative': sentiment['neg'],
+                    'neutral': sentiment['neu'],
+                })
+            print(f"✓ Economic Times: {len(news_data)} articles for {ticker}")
+        except Exception as e:
+            print(f"✗ Economic Times error for {ticker}: {e}")
+        return pd.DataFrame(news_data)
+    
+    
+    # ------------------------------------------------------------------ #
     #  AGGREGATOR                                                          #
     # ------------------------------------------------------------------ #
     def get_daily_sentiment(self, ticker):
@@ -241,11 +319,20 @@ class NewsScraper:
           (feature_engineering.py already referenced these but original
            code never produced them — they were silently zeroed out)
         """
-        tasks = {
-            'finviz':       lambda: self.scrape_finviz_news(ticker),
-            'newsapi':      lambda: self.scrape_newsapi(ticker),
-            'alphavantage': lambda: self.scrape_alphavantage_news(ticker),
-        }
+        is_indian = ticker.endswith('.NS') or ticker.endswith('.BO')
+
+        if is_indian:
+            tasks = {
+                'moneycontrol':   lambda: self.scrape_moneycontrol(ticker),
+                'economic_times': lambda: self.scrape_economic_times(ticker),
+                'newsapi':        lambda: self.scrape_newsapi(ticker),
+            }
+        else:
+            tasks = {
+                'finviz':       lambda: self.scrape_finviz_news(ticker),
+                'newsapi':      lambda: self.scrape_newsapi(ticker),
+                'alphavantage': lambda: self.scrape_alphavantage_news(ticker),
+            }
 
         all_news = []
         with ThreadPoolExecutor(max_workers=3) as executor:

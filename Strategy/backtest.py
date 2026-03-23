@@ -13,7 +13,12 @@ Logic:
 
 import pandas as pd
 import numpy as np
-from stop_loss import StopLossManager, StopLossConfig, compute_atr
+import sys
+import os
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# from stop_loss import StopLossManager, StopLossConfig, compute_atr
+from .stop_loss import StopLossManager, StopLossConfig, compute_atr
 
 
 class Backtester:

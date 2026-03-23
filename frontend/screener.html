@@ -18,7 +18,7 @@
   --bg4:   #1c2436;
   --line:  rgba(255,255,255,0.06);
   --line2: rgba(255,255,255,0.10);
-  --g:     #00c97a;          /* green accent */
+  --g:     #00c97a;
   --g2:    rgba(0,201,122,.12);
   --g3:    rgba(0,201,122,.06);
   --red:   #f04f5a;
@@ -375,13 +375,8 @@ body {
   transition: all .18s; white-space: nowrap;
   letter-spacing: .01em;
 }
-.predict-btn:hover {
-  background: var(--g);
-  color: #000;
-}
-.predict-btn:disabled {
-  opacity: .45; cursor: not-allowed;
-}
+.predict-btn:hover { background: var(--g); color: #000; }
+.predict-btn:disabled { opacity: .45; cursor: not-allowed; }
 .predict-btn .spin {
   width: 11px; height: 11px;
   border: 2px solid currentColor;
@@ -429,10 +424,7 @@ body {
 .mm span { color: var(--txt3); margin-right: 3px; }
 
 /* progress bar */
-.prog-wrap {
-  margin: 14px 24px;
-  display: none;
-}
+.prog-wrap { margin: 14px 24px; display: none; }
 .prog-wrap.open { display: block; }
 .prog-label {
   font-size: 10px; color: var(--txt2); margin-bottom: 6px;
@@ -446,17 +438,13 @@ body {
   height: 100%; background: var(--g);
   border-radius: 99px; transition: width .5s ease;
 }
-.prog-steps {
-  display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px;
-}
+.prog-steps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
 .ps {
   font-size: 9px; padding: 2px 7px;
-  border-radius: 3px;
-  border: 1px solid var(--line);
-  color: var(--txt3);
+  border-radius: 3px; border: 1px solid var(--line); color: var(--txt3);
 }
-.ps.done   { background: var(--g3);  border-color: var(--g);  color: var(--g); }
-.ps.active { background: var(--bg3); border-color: var(--g);  color: var(--g);
+.ps.done   { background: var(--g3);  border-color: var(--g); color: var(--g); }
+.ps.active { background: var(--bg3); border-color: var(--g); color: var(--g);
              animation: ps-blink .9s infinite; }
 @keyframes ps-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
 
@@ -503,13 +491,11 @@ body {
 <!-- ── TOPBAR ─────────────────────────────────────────────── -->
 <div class="topbar">
   <div class="logo">Stock<span>Sense</span></div>
-
   <div class="search-outer">
     <span class="search-icon">⌕</span>
-    <input id="searchInput" type="text" placeholder="Search ticker… e.g. TSLA, MSFT" autocomplete="off"/>
+    <input id="searchInput" type="text" placeholder="Search ticker… e.g. TSLA, TCS.NS" autocomplete="off"/>
     <div class="search-dropdown" id="searchDropdown"></div>
   </div>
-
   <div class="api-pill">
     <div class="dot" id="apiDot"></div>
     <span id="apiLabel">connecting</span>
@@ -531,13 +517,11 @@ body {
   <!-- RIGHT PANEL -->
   <div class="panel" id="panel">
 
-    <!-- empty state -->
     <div class="empty-state" id="emptyState">
       <div class="big">↖</div>
       <p>Select a stock to view details</p>
     </div>
 
-    <!-- detail view (hidden until stock selected) -->
     <div id="detailView" style="display:none; flex-direction:column; flex:1; min-height:0;">
 
       <!-- Header -->
@@ -552,7 +536,6 @@ body {
             <div class="det-chg" id="dChg"></div>
           </div>
         </div>
-        <!-- Metrics strip -->
         <div class="metrics-strip" id="metricsStrip"></div>
       </div>
 
@@ -597,7 +580,7 @@ body {
         <div class="overview-grid" id="overviewGrid"></div>
       </div>
 
-      <!-- Progress bar (prediction running) -->
+      <!-- Progress bar -->
       <div class="prog-wrap" id="progWrap">
         <div class="prog-label">
           <span id="progMsg">Starting…</span>
@@ -642,9 +625,36 @@ const PIPELINE_STEPS = [
 ];
 
 /* ═══════════════════════════════════════════════════════
+   CURRENCY HELPER
+   Returns the correct symbol for a given currency code.
+   Indian stocks (INR) show ₹, US stocks show $, etc.
+═══════════════════════════════════════════════════════ */
+function currSym(sym) {
+  const s = stocks[sym];
+  const currency = (s && s.currency) ? s.currency.toUpperCase() : 'USD';
+  const map = {
+    'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£',
+    'JPY': '¥', 'CNY': '¥', 'HKD': 'HK$', 'CAD': 'CA$',
+    'AUD': 'A$', 'SGD': 'S$',
+  };
+  return map[currency] || currency + ' ';
+}
+
+/* Same helper but takes a currency string directly */
+function currSymFrom(currency) {
+  const c = (currency || 'USD').toUpperCase();
+  const map = {
+    'INR': '₹', 'USD': '$', 'EUR': '€', 'GBP': '£',
+    'JPY': '¥', 'CNY': '¥', 'HKD': 'HK$', 'CAD': 'CA$',
+    'AUD': 'A$', 'SGD': 'S$',
+  };
+  return map[c] || c + ' ';
+}
+
+/* ═══════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════ */
-let stocks      = {};       // sym → full stock object
+let stocks      = {};
 let activeSym   = null;
 let activeRange = '3M';
 let mainChart   = null;
@@ -669,7 +679,7 @@ async function checkApi() {
     const r = await fetch(API + '/', { signal: AbortSignal.timeout(2500) });
     apiAlive = r.ok;
   } catch { apiAlive = false; }
-  document.getElementById('apiDot').className   = 'dot ' + (apiAlive ? 'live' : 'dead');
+  document.getElementById('apiDot').className    = 'dot ' + (apiAlive ? 'live' : 'dead');
   document.getElementById('apiLabel').textContent = apiAlive ? 'API live' : 'API offline';
 }
 
@@ -678,9 +688,7 @@ async function checkApi() {
 ═══════════════════════════════════════════════════════ */
 async function loadDefaultCards() {
   showSkeletons(DEFAULTS.length);
-
   if (!apiAlive) { toast('⚠ API offline — start: uvicorn api:app --reload --port 8000'); return; }
-
   try {
     const r    = await fetch(`${API}/stocks?tickers=${DEFAULTS.join(',')}`);
     const data = await r.json();
@@ -705,8 +713,9 @@ function renderCards(syms) {
   list.innerHTML = syms.map(sym => {
     const s  = stocks[sym];
     const up = s.chg >= 0;
+    const cs = currSym(sym);
     return `
-    <div class="scard${activeSym===sym?' active':''}" id="card_${sym}" onclick="selectStock('${sym}')">
+    <div class="scard${activeSym===sym?' active':''}" id="card_${sym.replace('.','_')}" onclick="selectStock('${sym}')">
       <div class="scard-top">
         <div>
           <div class="scard-sym">${sym}</div>
@@ -714,20 +723,20 @@ function renderCards(syms) {
         </div>
         <span class="badge ${up?'up':'dn'}">${up?'+':''}${(s.chg_pct||0).toFixed(2)}%</span>
       </div>
-      <div class="scard-price">$${(s.price||0).toFixed(2)}</div>
-      <div class="scard-sub">Vol ${fmtV(s.volume)} · ${fmtC(s.mkt_cap)}</div>
+      <div class="scard-price">${cs}${(s.price||0).toFixed(2)}</div>
+      <div class="scard-sub">Vol ${fmtV(s.volume)} · ${fmtMktCap(s.mkt_cap, s.currency)}</div>
       <div class="mini-chart-wrap">
-        <canvas id="spark_${sym}"></canvas>
+        <canvas id="spark_${sym.replace('.','_')}"></canvas>
       </div>
     </div>`;
   }).join('');
 
-  // Draw sparklines
   syms.forEach(sym => {
     const s      = stocks[sym];
-    const canvas = document.getElementById('spark_' + sym);
+    const safeId = sym.replace('.', '_');
+    const canvas = document.getElementById('spark_' + safeId);
     if (!canvas || !s.sparkline?.length) return;
-    drawSpark(canvas, s.sparkline.map(x => x[1]), s.chg >= 0, sym);
+    drawSpark(canvas, s.sparkline.map(x => x[1]), s.chg >= 0, safeId);
   });
 }
 
@@ -752,31 +761,25 @@ function drawSpark(canvas, prices, up, id) {
    SELECT STOCK
 ═══════════════════════════════════════════════════════ */
 async function selectStock(sym) {
-  // Update active card highlight
   document.querySelectorAll('.scard').forEach(c => c.classList.remove('active'));
-  const card = document.getElementById('card_' + sym);
+  const safeId = sym.replace('.', '_');
+  const card = document.getElementById('card_' + safeId);
   if (card) card.classList.add('active');
 
   activeSym = sym;
-
-  // Show detail view
-  document.getElementById('emptyState').style.display   = 'none';
-  document.getElementById('detailView').style.display   = 'flex';
-
-  // Reset prediction area
+  document.getElementById('emptyState').style.display  = 'none';
+  document.getElementById('detailView').style.display  = 'flex';
   resetPrediction();
 
-  // If we already have full history, render immediately
   if (stocks[sym]?.history?.length) {
     renderDetail(sym);
     return;
   }
 
-  // Fetch full data
   if (!apiAlive) { toast('API offline'); return; }
   try {
-    const r  = await fetch(`${API}/stock/${sym}?period=1y`);
-    const d  = await r.json();
+    const r = await fetch(`${API}/stock/${encodeURIComponent(sym)}?period=1y`);
+    const d = await r.json();
     stocks[sym] = { ...stocks[sym], ...d };
     renderDetail(sym);
   } catch (e) { toast('Failed to load ' + sym + ': ' + e.message); }
@@ -788,45 +791,38 @@ async function selectStock(sym) {
 function renderDetail(sym) {
   const s  = stocks[sym]; if (!s) return;
   const up = s.chg >= 0;
+  const cs = currSym(sym);
 
-  // Header
   document.getElementById('dSym').innerHTML =
     `${sym} <span class="sector-chip">${s.sector || '—'}</span>`;
   document.getElementById('dName').textContent  = s.name || '';
-  document.getElementById('dPrice').textContent = `$${(s.price||0).toFixed(2)}`;
-  const ce = document.getElementById('dChg');
-  ce.textContent = `${up?'+':''}$${Math.abs(s.chg||0).toFixed(2)}  (${up?'+':''}${(s.chg_pct||0).toFixed(2)}%)  today`;
-  ce.className = 'det-chg ' + (up ? 'up' : 'dn');
+  document.getElementById('dPrice').textContent = `${cs}${(s.price||0).toFixed(2)}`;
 
-  // Metrics strip
+  const ce = document.getElementById('dChg');
+  ce.textContent = `${up?'+':''}${cs}${Math.abs(s.chg||0).toFixed(2)}  (${up?'+':''}${(s.chg_pct||0).toFixed(2)}%)  today`;
+  ce.className   = 'det-chg ' + (up ? 'up' : 'dn');
+
   const metrics = [
-    ['Open',        `$${(s.open||0).toFixed(2)}`],
-    ['Prev Close',  `$${(s.prev_close||0).toFixed(2)}`],
-    ['Day High',    `$${(s.day_high||0).toFixed(2)}`],
-    ['Day Low',     `$${(s.day_low||0).toFixed(2)}`],
-    ['Volume',      fmtV(s.volume)],
-    ['Avg Vol',     fmtV(s.avg_volume)],
-    ['Mkt Cap',     fmtC(s.mkt_cap)],
-    ['P/E',         s.pe ? s.pe.toFixed(1) : '—'],
-    ['52W High',    `$${s.week52_high||'—'}`],
-    ['52W Low',     `$${s.week52_low||'—'}`],
-    ['Beta',        s.beta ? s.beta.toFixed(2) : '—'],
-    ['Div Yield',   s.div_yield ? s.div_yield.toFixed(2)+'%' : '—'],
+    ['Open',       `${cs}${(s.open||0).toFixed(2)}`],
+    ['Prev Close', `${cs}${(s.prev_close||0).toFixed(2)}`],
+    ['Day High',   `${cs}${(s.day_high||0).toFixed(2)}`],
+    ['Day Low',    `${cs}${(s.day_low||0).toFixed(2)}`],
+    ['Volume',     fmtV(s.volume)],
+    ['Avg Vol',    fmtV(s.avg_volume)],
+    ['Mkt Cap',    fmtMktCap(s.mkt_cap, s.currency)],
+    ['P/E',        s.pe ? s.pe.toFixed(1) : '—'],
+    ['52W High',   `${cs}${s.week52_high||'—'}`],
+    ['52W Low',    `${cs}${s.week52_low||'—'}`],
+    ['Beta',       s.beta ? s.beta.toFixed(2) : '—'],
+    ['Div Yield',  s.div_yield ? s.div_yield.toFixed(2)+'%' : '—'],
   ];
   document.getElementById('metricsStrip').innerHTML = metrics
     .map(([l,v]) => `<div class="metric"><div class="metric-lbl">${l}</div><div class="metric-val">${v}</div></div>`)
     .join('');
 
-  // Default tab to chart
   switchTab('chart', document.querySelector('.tab'));
-
-  // Chart
   drawMainChart(sym, activeRange);
-
-  // History table
   buildHistTable(sym);
-
-  // Overview
   buildOverview(sym);
 }
 
@@ -849,8 +845,8 @@ function drawMainChart(sym, range) {
   const dates  = rows.map(r => r.date);
   const closes = rows.map(r => r.close);
   const up     = closes[closes.length-1] >= closes[0];
+  const cs     = currSym(sym);
 
-  // Label thinning
   const skip = Math.max(1, Math.floor(dates.length / 8));
   const lbls = dates.map((d, i) => i % skip === 0 ? d.slice(5) : '');
 
@@ -882,7 +878,7 @@ function drawMainChart(sym, range) {
           titleColor: '#6b7a99', bodyColor: '#d4dae8',
           callbacks: {
             title: t => dates[t[0].dataIndex],
-            label: t => '  $' + t.parsed.y.toFixed(2),
+            label: t => '  ' + cs + t.parsed.y.toFixed(2),
           }
         }
       },
@@ -894,7 +890,7 @@ function drawMainChart(sym, range) {
         },
         y: {
           position: 'right',
-          ticks: { color:'#333d55', font:{family:'JetBrains Mono',size:10}, callback: v => '$'+v.toFixed(0) },
+          ticks: { color:'#333d55', font:{family:'JetBrains Mono',size:10}, callback: v => cs + v.toFixed(0) },
           grid:  { color:'rgba(255,255,255,.03)' },
           border:{ color:'rgba(255,255,255,.06)' },
         }
@@ -907,6 +903,7 @@ function drawMainChart(sym, range) {
    HISTORY TABLE
 ═══════════════════════════════════════════════════════ */
 function buildHistTable(sym) {
+  const cs   = currSym(sym);
   const rows = (stocks[sym]?.history || []).slice(-60).reverse();
   document.getElementById('histBody').innerHTML = rows.map((r, i) => {
     const prev = rows[i + 1];
@@ -915,10 +912,10 @@ function buildHistTable(sym) {
     const cls  = chg >= 0 ? 'up' : 'dn';
     return `<tr>
       <td>${r.date}</td>
-      <td>$${r.open.toFixed(2)}</td>
-      <td>$${r.high.toFixed(2)}</td>
-      <td>$${r.low.toFixed(2)}</td>
-      <td>$${r.close.toFixed(2)}</td>
+      <td>${cs}${r.open.toFixed(2)}</td>
+      <td>${cs}${r.high.toFixed(2)}</td>
+      <td>${cs}${r.low.toFixed(2)}</td>
+      <td>${cs}${r.close.toFixed(2)}</td>
       <td class="${cls}">${chg>=0?'+':''}${chg} (${pct>=0?'+':''}${pct}%)</td>
       <td>${fmtV(r.volume)}</td>
     </tr>`;
@@ -930,28 +927,29 @@ function buildHistTable(sym) {
 ═══════════════════════════════════════════════════════ */
 function buildOverview(sym) {
   const s    = stocks[sym]; if (!s) return;
+  const cs   = currSym(sym);
   const hist = s.history || [];
   const ytd  = hist.find(r => r.date >= new Date().getFullYear() + '-01-01');
   const ytdR = ytd ? ((s.price - ytd.close) / ytd.close * 100).toFixed(2) + '%' : '—';
 
   const fields = [
-    ['Symbol',       s.sym],
-    ['Company',      s.name || '—'],
-    ['Sector',       s.sector || '—'],
-    ['Industry',     s.industry || '—'],
-    ['Country',      s.country || '—'],
-    ['Exchange',     s.exchange || '—'],
-    ['Currency',     s.currency || 'USD'],
-    ['Market Cap',   fmtC(s.mkt_cap)],
-    ['P/E Ratio',    s.pe ? s.pe.toFixed(2) : '—'],
-    ['EPS (TTM)',    s.eps ? '$'+s.eps.toFixed(2) : '—'],
-    ['Beta',         s.beta ? s.beta.toFixed(2) : '—'],
-    ['Div Yield',    s.div_yield ? s.div_yield.toFixed(2)+'%' : '—'],
-    ['Analyst Target', s.target_mean ? '$'+s.target_mean.toFixed(2) : '—'],
-    ['52W High',     '$' + s.week52_high],
-    ['52W Low',      '$' + s.week52_low],
-    ['YTD Return',   ytdR],
-    ['History rows', hist.length + ' days'],
+    ['Symbol',         s.sym],
+    ['Company',        s.name || '—'],
+    ['Sector',         s.sector || '—'],
+    ['Industry',       s.industry || '—'],
+    ['Country',        s.country || '—'],
+    ['Exchange',       s.exchange || '—'],
+    ['Currency',       s.currency || 'USD'],
+    ['Market Cap',     fmtMktCap(s.mkt_cap, s.currency)],
+    ['P/E Ratio',      s.pe ? s.pe.toFixed(2) : '—'],
+    ['EPS (TTM)',      s.eps ? cs + s.eps.toFixed(2) : '—'],
+    ['Beta',           s.beta ? s.beta.toFixed(2) : '—'],
+    ['Div Yield',      s.div_yield ? s.div_yield.toFixed(2) + '%' : '—'],
+    ['Analyst Target', s.target_mean ? cs + s.target_mean.toFixed(2) : '—'],
+    ['52W High',       cs + s.week52_high],
+    ['52W Low',        cs + s.week52_low],
+    ['YTD Return',     ytdR],
+    ['History rows',   hist.length + ' days'],
   ];
   document.getElementById('overviewGrid').innerHTML = fields
     .map(([l,v]) => `<div class="obox"><div class="obox-lbl">${l}</div><div class="obox-val">${v}</div></div>`)
@@ -971,6 +969,8 @@ function switchTab(name, el) {
 
 /* ═══════════════════════════════════════════════════════
    SEARCH
+   Handles .NS/.BO tickers — preserves case before sending
+   to the API (encodeURIComponent keeps dots intact).
 ═══════════════════════════════════════════════════════ */
 let searchTimer = null;
 const inp = document.getElementById('searchInput');
@@ -995,7 +995,8 @@ async function doSearch(q) {
     return;
   }
   try {
-    const r    = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+    // Use encodeURIComponent so TCS.NS becomes TCS.NS (dot preserved)
+    const r    = await fetch(`${API}/search?q=${encodeURIComponent(q.toUpperCase())}`);
     const data = await r.json();
     if (!data.results.length) {
       dd.innerHTML = '<div class="sd-empty">No results for "' + q + '"</div>';
@@ -1003,12 +1004,13 @@ async function doSearch(q) {
     }
     dd.innerHTML = data.results.map(s => {
       const up = (s.chg_pct||0) >= 0;
+      const cs = currSymFrom(s.currency);
       return `<div class="sd-item" onclick="addAndSelect('${s.sym}')">
         <div>
           <div class="sd-sym">${s.sym}</div>
           <div class="sd-name">${(s.name||'').slice(0,34)}</div>
         </div>
-        <div class="sd-price">$${(s.price||0).toFixed(2)}
+        <div class="sd-price">${cs}${(s.price||0).toFixed(2)}
           <span style="font-size:10px;color:${up?'var(--g)':'var(--red)'};margin-left:4px">
             ${up?'+':''}${(s.chg_pct||0).toFixed(2)}%
           </span>
@@ -1024,11 +1026,10 @@ async function addAndSelect(sym) {
   dd.classList.remove('open');
   inp.value = '';
 
-  // If not in sidebar yet, fetch light data and add card
   if (!stocks[sym]) {
     if (!apiAlive) { toast('API offline'); return; }
     try {
-      const r = await fetch(`${API}/stocks?tickers=${sym}`);
+      const r = await fetch(`${API}/stocks?tickers=${encodeURIComponent(sym)}`);
       const d = await r.json();
       if (d.stocks[0] && !d.stocks[0].error) {
         stocks[sym] = d.stocks[0];
@@ -1088,8 +1089,7 @@ function pollJob(jobId, btn) {
       const r   = await fetch(`${API}/predict/status/${jobId}`);
       const job = await r.json();
 
-      // figure out which step is active
-      const pct  = job.progress || 0;
+      const pct      = job.progress || 0;
       const stepPcts = [5, 20, 38, 52, 65, 76, 90, 100];
       const stepIdx  = stepPcts.findIndex(p => pct <= p);
       setProgress(pct, job.message || '', stepIdx < 0 ? PIPELINE_STEPS.length : stepIdx);
@@ -1136,11 +1136,13 @@ function showPredResult(res) {
   const up = res.delta >= 0;
   const s  = up ? '+' : '';
   const m  = res.metrics || {};
+  // Use the currency from the stored stock object
+  const cs = activeSym ? currSym(activeSym) : '$';
 
   document.getElementById('predRow').innerHTML = [
-    ['Current',   `$${res.current_price.toFixed(2)}`,  'neu'],
-    ['Predicted', `$${res.predicted_price.toFixed(2)}`, up?'up':'dn'],
-    ['Move',      `${s}$${Math.abs(res.delta).toFixed(2)}`, up?'up':'dn'],
+    ['Current',   `${cs}${res.current_price.toFixed(2)}`,  'neu'],
+    ['Predicted', `${cs}${res.predicted_price.toFixed(2)}`, up?'up':'dn'],
+    ['Move',      `${s}${cs}${Math.abs(res.delta).toFixed(2)}`, up?'up':'dn'],
     ['Move %',    `${s}${res.delta_pct.toFixed(2)}%`,  up?'up':'dn'],
     ['Signal',    res.signal,                           up?'up':'dn'],
     ['Source',    res.source,                           'neu'],
@@ -1151,7 +1153,7 @@ function showPredResult(res) {
     </div>`).join('');
 
   document.getElementById('metricsMini').innerHTML = [
-    ['Direction Acc', (m.Test_Direction_Accuracy||0).toFixed(1)+'%'],
+    ['Direction Acc', (m.Test_Direction_Accuracy || m.Test_DA || 0).toFixed(1)+'%'],
     ['Test RMSE',     (m.Test_RMSE||0).toFixed(4)],
     ['Test MAE',      (m.Test_MAE||0).toFixed(4)],
     ['Train RMSE',    (m.Train_RMSE||0).toFixed(4)],
@@ -1170,11 +1172,14 @@ function fmtV(v) {
   if (v >= 1e3) return (v/1e3).toFixed(0)+'K';
   return v;
 }
-function fmtC(v) {
+
+/* Market cap formatter — uses correct currency symbol */
+function fmtMktCap(v, currency) {
   if (!v) return '—';
-  if (v >= 1e12) return '$'+(v/1e12).toFixed(2)+'T';
-  if (v >= 1e9)  return '$'+(v/1e9).toFixed(1)+'B';
-  return '$'+(v/1e6).toFixed(0)+'M';
+  const cs = currSymFrom(currency);
+  if (v >= 1e12) return cs + (v/1e12).toFixed(2) + 'T';
+  if (v >= 1e9)  return cs + (v/1e9).toFixed(1)  + 'B';
+  return cs + (v/1e6).toFixed(0) + 'M';
 }
 
 /* ═══════════════════════════════════════════════════════

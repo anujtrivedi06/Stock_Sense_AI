@@ -1,21 +1,17 @@
 """
-StockSense AI — FastAPI Backend  (v3 — fast path)
-==================================================
-Speed improvements over previous version, mirroring app7.py:
+StockSense AI — FastAPI Backend  (v4)
+======================================
+Changes vs v3:
+  - Scraper imports updated (no more *2 suffixes)
+  - COMPANY_ALIASES removed — TrendsScraper handles yfinance fallback internally
+  - ticker passed to combine_all_features() for Indian feature support
+  - currency field added to /stocks and /search responses
 
-  1. GeneralPredictor  — pre-trained cross-stock model loaded ONCE at startup.
-                         Predict calls are instant (no training).
-  2. ThreadPoolExecutor — news + Google Trends + Reddit fetched IN PARALLEL,
-                          same as app7.py's _fetch_sentiment().
-  3. Per-stock cache    — feature CSV + per-stock model saved; reused on repeat calls.
-  4. Fallback chain     — general model → cached per-stock → fresh per-stock train.
-
-Run from your project root:
-    pip install fastapi uvicorn[standard] yfinance
+Run from project root:
     uvicorn api:app --reload --port 8000
 
-Train the general model first (one-time, ~10 min):
-    python general_predictor.py
+Train the general model first (one-time):
+    python train_general_model.py
 """
 
 import sys, os, traceback, threading
@@ -30,18 +26,17 @@ import yfinance as yf
 import numpy as np
 import pandas as pd
 
-# ── Project imports ───────────────────────────────────────────────────────────
 import config
-from data_scrapers.stock_scraper       import StockScraper
-from data_scrapers.news_scraper2       import NewsScraper
-from data_scrapers.trends_scraper2     import TrendsScraper
-from data_scrapers.reddit_scraper2     import RedditScraper
-from features.feature_engineering import FeatureEngineer
-from model.predictor           import StockPredictor
-from model.general_predictor   import GeneralPredictor
+from data_scrapers.stock_scraper   import StockScraper
+from data_scrapers.news_scraper    import NewsScraper
+from data_scrapers.trends_scraper  import TrendsScraper
+from data_scrapers.reddit_scraper  import RedditScraper
+from features.feature_engineering  import FeatureEngineer
+from model.predictor               import StockPredictor
+from model.general_predictor       import GeneralPredictor
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI(title="StockSense AI", version="3.0")
+app = FastAPI(title="StockSense AI", version="4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,8 +55,8 @@ FEATURE_DIR = "outputs/features"
 os.makedirs(MODEL_DIR,   exist_ok=True)
 os.makedirs(FEATURE_DIR, exist_ok=True)
 
-# Loaded once at startup, shared across all requests (thread-safe reads)
 _general_model: GeneralPredictor | None = None
+
 
 @app.on_event("startup")
 def load_general_model():
@@ -73,19 +68,23 @@ def load_general_model():
         print(f"✓ GeneralPredictor loaded from {GENERAL_MODEL_PATH}")
     else:
         print(f"⚠  No general model found at {GENERAL_MODEL_PATH}.")
-        print(f"   Run:  python general_predictor.py   to train it.")
+        print(f"   Run:  python train_general_model.py   to train it.")
         _general_model = None
+
 
 # ── Job store ─────────────────────────────────────────────────────────────────
 _jobs: dict = {}
 _jobs_lock  = threading.Lock()
 
+
 def _set_job(job_id: str, **kw):
     with _jobs_lock:
         _jobs[job_id].update(kw)
 
+
 def _model_path(sym):   return f"{MODEL_DIR}/{sym}.pkl"
 def _feature_path(sym): return f"{FEATURE_DIR}/{sym}.csv"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  HEALTH
@@ -93,10 +92,11 @@ def _feature_path(sym): return f"{FEATURE_DIR}/{sym}.csv"
 @app.get("/")
 def root():
     return {
-        "status":         "ok",
-        "service":        "StockSense AI API v3",
-        "general_model":  _general_model is not None,
+        "status":        "ok",
+        "service":       "StockSense AI API v4",
+        "general_model": _general_model is not None,
     }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  STOCK DATA — batch light snapshot (screener cards)
@@ -106,7 +106,6 @@ def get_stocks(tickers: str = "META,AAPL,AMZN,NFLX,GOOGL"):
     syms    = [s.strip().upper() for s in tickers.split(",") if s.strip()]
     results = []
 
-    # Fetch all tickers in parallel
     def _fetch_one(sym):
         t    = yf.Ticker(sym)
         info = t.info or {}
@@ -126,25 +125,26 @@ def get_stocks(tickers: str = "META,AAPL,AMZN,NFLX,GOOGL"):
         chg_pct    = round((chg / prev_close * 100) if prev_close else 0, 3)
 
         return {
-            "sym":        sym,
-            "name":       info.get("longName") or info.get("shortName") or sym,
-            "sector":     info.get("sector", ""),
-            "price":      round(price, 2),
-            "prev_close": round(prev_close, 2),
-            "chg":        chg,
-            "chg_pct":    chg_pct,
-            "open":       round(float(info.get("open") or
-                                     info.get("regularMarketOpen") or 0), 2),
-            "day_high":   round(float(info.get("dayHigh")  or 0), 2),
-            "day_low":    round(float(info.get("dayLow")   or 0), 2),
-            "volume":     info.get("volume") or 0,
-            "mkt_cap":    info.get("marketCap") or 0,
-            "pe":         round(float(info.get("trailingPE") or 0), 2),
-            "week52_high":round(float(info.get("fiftyTwoWeekHigh") or 0), 2),
-            "week52_low": round(float(info.get("fiftyTwoWeekLow")  or 0), 2),
-            "avg_volume": info.get("averageVolume") or 0,
-            "beta":       round(float(info.get("beta") or 0), 2),
-            "sparkline":  list(zip(dates[-90:], closes[-90:])),
+            "sym":         sym,
+            "name":        info.get("longName") or info.get("shortName") or sym,
+            "sector":      info.get("sector", ""),
+            "price":       round(price, 2),
+            "prev_close":  round(prev_close, 2),
+            "chg":         chg,
+            "chg_pct":     chg_pct,
+            "open":        round(float(info.get("open") or
+                                      info.get("regularMarketOpen") or 0), 2),
+            "day_high":    round(float(info.get("dayHigh")  or 0), 2),
+            "day_low":     round(float(info.get("dayLow")   or 0), 2),
+            "volume":      info.get("volume") or 0,
+            "mkt_cap":     info.get("marketCap") or 0,
+            "pe":          round(float(info.get("trailingPE") or 0), 2),
+            "week52_high": round(float(info.get("fiftyTwoWeekHigh") or 0), 2),
+            "week52_low":  round(float(info.get("fiftyTwoWeekLow")  or 0), 2),
+            "avg_volume":  info.get("averageVolume") or 0,
+            "beta":        round(float(info.get("beta") or 0), 2),
+            "currency":    info.get("currency", "USD"),
+            "sparkline":   list(zip(dates[-90:], closes[-90:])),
         }
 
     with ThreadPoolExecutor(max_workers=min(len(syms), 8)) as ex:
@@ -156,7 +156,6 @@ def get_stocks(tickers: str = "META,AAPL,AMZN,NFLX,GOOGL"):
             except Exception as e:
                 results.append({"sym": sym, "error": True, "detail": str(e)})
 
-    # Return in original order
     order = {s: i for i, s in enumerate(syms)}
     results.sort(key=lambda x: order.get(x.get("sym", ""), 999))
     return {"stocks": results, "fetched_at": datetime.now().isoformat()}
@@ -247,7 +246,7 @@ def search_ticker(q: str):
         price = float(info.get("currentPrice") or
                       info.get("regularMarketPrice") or 0)
         if price > 0:
-            prev  = float(info.get("previousClose") or price)
+            prev = float(info.get("previousClose") or price)
             results.append({
                 "sym":      q,
                 "name":     info.get("longName") or info.get("shortName") or q,
@@ -256,6 +255,7 @@ def search_ticker(q: str):
                 "chg_pct":  round((price - prev) / prev * 100 if prev else 0, 3),
                 "exchange": info.get("exchange", ""),
                 "mkt_cap":  info.get("marketCap") or 0,
+                "currency": info.get("currency", "USD"),
             })
     except Exception:
         pass
@@ -263,7 +263,7 @@ def search_ticker(q: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PREDICTION — async, with parallel sentiment fetch + general model
+#  PREDICTION
 # ══════════════════════════════════════════════════════════════════════════════
 class PredictRequest(BaseModel):
     ticker:        str
@@ -299,29 +299,22 @@ def predict_status(job_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PARALLEL SENTIMENT FETCH  (mirrors app7.py _fetch_sentiment exactly)
+#  PARALLEL SENTIMENT FETCH
 # ══════════════════════════════════════════════════════════════════════════════
-COMPANY_ALIASES = getattr(config, 'COMPANY_ALIASES', {
-    'TSLA': 'Tesla', 'AAPL': 'Apple', 'GOOGL': 'Google',
-    'MSFT': 'Microsoft', 'AMZN': 'Amazon', 'NVDA': 'NVIDIA',
-    'META': 'Meta', 'NFLX': 'Netflix', 'JPM': 'JPMorgan',
-})
-
 def _fetch_sentiment_parallel(sym: str, start_date: str, end_date: str) -> dict:
     """
-    Fetch news, Google Trends, Reddit IN PARALLEL using ThreadPoolExecutor.
-    Mirrors app7.py's _fetch_sentiment() exactly.
-    Returns dict with keys 'news', 'trends', 'reddit' → DataFrames.
+    Fetch news, Google Trends, Reddit IN PARALLEL.
+    - NewsScraper.get_daily_sentiment() already routes Indian vs US tickers
+    - TrendsScraper.get_search_trends() already strips .NS/.BO and falls
+      back to yfinance company name internally — no COMPANY_ALIASES needed
+    - RedditScraper.get_daily_reddit_sentiment() already adds Indian
+      subreddits for .NS/.BO tickers
     """
     def fetch_news():
         return NewsScraper().get_daily_sentiment(sym)
 
     def fetch_trends():
-        s  = TrendsScraper()
-        df = s.get_search_trends(sym, start_date, end_date)
-        if df.empty and sym in COMPANY_ALIASES:
-            df = s.get_search_trends(COMPANY_ALIASES[sym], start_date, end_date)
-        return df
+        return TrendsScraper().get_search_trends(sym, start_date, end_date)
 
     def fetch_reddit():
         return RedditScraper().get_daily_reddit_sentiment(sym)
@@ -343,14 +336,14 @@ def _fetch_sentiment_parallel(sym: str, start_date: str, end_date: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PIPELINE  (background thread — mirrors app7.py run_pipeline priority chain)
+#  PIPELINE  (background thread)
 # ══════════════════════════════════════════════════════════════════════════════
 def _run_pipeline(job_id: str, sym: str,
                   start_date: str, end_date: str, force_retrain: bool):
     try:
-        engineer  = FeatureEngineer()
+        engineer = FeatureEngineer()
 
-        # ── STEP 1 — fetch stock data ─────────────────────────────────────────
+        # ── STEP 1 — fetch stock data ──────────────────────────────────────
         _set_job(job_id, status="running", progress=5,
                  message="Fetching historical stock data…")
         sc       = StockScraper(sym)
@@ -359,21 +352,22 @@ def _run_pipeline(job_id: str, sym: str,
             raise ValueError(f"No stock data returned for {sym}")
         stock_df = sc.calculate_technical_indicators(stock_df)
 
-        # ── STEP 2 — parallel sentiment (news + trends + reddit at once) ───────
+        # ── STEP 2 — parallel sentiment ────────────────────────────────────
         _set_job(job_id, progress=20,
                  message="Fetching news, Google Trends & Reddit in parallel…")
         sentiment = _fetch_sentiment_parallel(sym, start_date, end_date)
 
-        # ── STEP 3 — feature engineering ─────────────────────────────────────
+        # ── STEP 3 — feature engineering ──────────────────────────────────
         _set_job(job_id, progress=45, message="Engineering features…")
         combined_df = engineer.combine_all_features(
             stock_df,
             sentiment.get('news',   pd.DataFrame()),
             sentiment.get('trends', pd.DataFrame()),
             sentiment.get('reddit', pd.DataFrame()),
+            ticker=sym,                          # enables Indian features
         )
 
-        # ── PRIORITY 1: General model (instant — no training) ─────────────────
+        # ── PRIORITY 1: General model (instant — no training) ──────────────
         if _general_model is not None and not force_retrain:
             _set_job(job_id, progress=70,
                      message="Running GeneralPredictor (no training needed)…")
@@ -386,10 +380,8 @@ def _run_pipeline(job_id: str, sym: str,
                     combined_df[col] = 0.0
             engineer.feature_columns = feature_cols
 
-            # Save feature CSV for cache
             combined_df.to_csv(_feature_path(sym), index=False)
 
-            # Evaluate on test split
             split_idx = int(len(combined_df) * (1 - config.TEST_SIZE))
             test_df   = combined_df.iloc[split_idx:].copy().reset_index(drop=True)
             X_train   = combined_df.iloc[:split_idx][feature_cols]
@@ -397,12 +389,10 @@ def _run_pipeline(job_id: str, sym: str,
             X_test    = test_df[feature_cols]
             y_test    = test_df['target']
 
-            # Temporarily attach train data so evaluate() works
             _general_model.X_train = X_train
             _general_model.y_train = y_train
             metrics, _ = _general_model.evaluate(X_test, y_test)
 
-            # Predict tomorrow
             latest_return   = _general_model.predict(
                 combined_df[feature_cols].iloc[-1:])[0]
             current_price   = float(combined_df['close'].iloc[-1])
@@ -414,19 +404,22 @@ def _run_pipeline(job_id: str, sym: str,
                                           metrics, "general_model"))
             return
 
-        # ── PRIORITY 2: Cached per-stock model ────────────────────────────────
+        # ── PRIORITY 2: Cached per-stock model ────────────────────────────
         mp = _model_path(sym)
         fp = _feature_path(sym)
         predictor = StockPredictor()
 
         if os.path.exists(mp) and os.path.exists(fp) and not force_retrain:
-            _set_job(job_id, progress=70, message="Loading cached per-stock model…")
+            _set_job(job_id, progress=70,
+                     message="Loading cached per-stock model…")
             predictor.load_model(mp)
 
             cached_df = pd.read_csv(fp)
             cached_df["Date"] = pd.to_datetime(cached_df["Date"])
-            exclude = ('Date', 'target', 'date', 'close', 'open', 'high', 'low', 'volume')
-            engineer.feature_columns = [c for c in cached_df.columns if c not in exclude]
+            exclude = ('Date', 'target', 'date', 'close', 'open',
+                       'high', 'low', 'volume')
+            engineer.feature_columns = [
+                c for c in cached_df.columns if c not in exclude]
 
             _, X_test, _, y_test, test_df = engineer.prepare_train_test_split(
                 cached_df, test_size=config.TEST_SIZE)
@@ -443,13 +436,14 @@ def _run_pipeline(job_id: str, sym: str,
                                           metrics, "cached"))
             return
 
-        # ── PRIORITY 3: Train per-stock model from scratch ────────────────────
+        # ── PRIORITY 3: Train per-stock model from scratch ─────────────────
         _set_job(job_id, progress=60,
                  message="Training RF + GBM + XGBoost ensemble…")
         combined_df.to_csv(fp, index=False)
 
-        X_train, X_test, y_train, y_test, test_df = engineer.prepare_train_test_split(
-            combined_df, test_size=config.TEST_SIZE)
+        X_train, X_test, y_train, y_test, test_df = \
+            engineer.prepare_train_test_split(
+                combined_df, test_size=config.TEST_SIZE)
         predictor.train(X_train, y_train)
         predictor.save_model(mp)
 
@@ -486,6 +480,7 @@ def _build_result(sym, cur, pred, metrics, source):
         "delta":           delta,
         "delta_pct":       delta_pct,
         "signal":          "BUY" if delta > 0 else "SELL",
-        "metrics":         {k: round(float(v), 4) for k, v in (metrics or {}).items()},
+        "metrics":         {k: round(float(v), 4)
+                            for k, v in (metrics or {}).items()},
         "timestamp":       datetime.now().isoformat(),
     }

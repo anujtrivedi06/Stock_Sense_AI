@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-SUBREDDITS = ['wallstreetbets', 'stocks', 'investing', 'options']
+SUBREDDITS = ['wallstreetbets', 'stocks', 'investing', 'options', 'IndianStockMarket', 'StockMarketIndia']
 
 
 class RedditScraper:

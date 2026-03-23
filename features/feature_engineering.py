@@ -1,34 +1,25 @@
 # features/feature_engineering.py
 """
-Feature engineering pipeline — generalisation-ready.
+Feature engineering pipeline — generalisation-ready, supports both
+US and Indian (NSE/BSE) stocks.
 
-KEY CHANGE vs original:
-  All price-based features are now RATIOS (scale-free).
-  A model trained on AAPL at $180 can now predict TSLA at $250
-  because no feature contains a raw dollar value — only relationships
-  between prices. This is the prerequisite for a general model.
+All price-based features are RATIOS (scale-free) so a model trained on
+AAPL at $180 can predict TCS.NS at Rs3500 without raw price leakage.
 
-  Raw dollar columns (open, high, low, close, volume) are kept in the
-  DataFrame for the backtester and prediction display but are EXCLUDED
-  from self.feature_columns so the model never sees them.
+Indian-specific additions (when ticker ends in .NS or .BO):
+  upper_circuit_proximity — how close price is to the 10% upper circuit limit
+  lower_circuit_proximity — how close price is to the 10% lower circuit limit
+  is_indian_stock         — binary flag so the model knows the market context
+  Holiday gaps from INDIAN_MARKET_HOLIDAYS in config are forward-filled
+  rather than left as NaN rows.
 
-Ratio features replacing raw price features:
-  price_vs_sma5        close / SMA5          (above short MA?)
-  price_vs_sma20       close / SMA20         (above long MA?)
-  sma5_vs_sma20        SMA5 / SMA20          (golden/death cross)
-  high_low_range       (high-low) / close    (daily range %)
-  close_vs_open        (close-open) / open   (intraday direction)
-  macd_normalised      MACD / close          (MACD scaled to price)
-  macd_signal_gap      (MACD-signal) / close (crossover strength)
-  volume_ratio         volume / 20d avg      (abnormal volume)
-  volatility_pct       rolling std / close   (volatility %)
-  price_momentum_Nd    N-day pct return      (already scale-free)
-  rsi_norm             RSI / 100             (normalised to 0-1)
-  price_vs_smaW        close / rolling(W)    (rolling ratio)
-  volatility_ratio_W   std(W) / close        (rolling vol ratio)
+New parameter:
+  ticker (str) — pass the ticker symbol to enable Indian features.
+                 Defaults to "" so existing callers without the param still work.
 """
 import pandas as pd
 import numpy as np
+import config
 
 
 class FeatureEngineer:
@@ -46,7 +37,7 @@ class FeatureEngineer:
         return df
 
     # ------------------------------------------------------------------ #
-    #  Rolling ratio features (replaces raw rolling close)                #
+    #  Rolling ratio features                                              #
     # ------------------------------------------------------------------ #
     def create_rolling_features(self, df, windows=[3, 7, 14]):
         df = df.copy()
@@ -60,22 +51,45 @@ class FeatureEngineer:
     # ------------------------------------------------------------------ #
     #  Main combiner                                                       #
     # ------------------------------------------------------------------ #
-    def combine_all_features(self, stock_df, news_df, trends_df, reddit_df):
+    def combine_all_features(self, stock_df, news_df, trends_df,
+                             reddit_df, ticker=""):
+        """
+        Parameters
+        ----------
+        stock_df   : DataFrame from StockScraper
+        news_df    : DataFrame from NewsScraper
+        trends_df  : DataFrame from TrendsScraper
+        reddit_df  : DataFrame from RedditScraper
+        ticker     : str — ticker symbol, used to enable Indian-specific
+                     features. Defaults to "" (no Indian features).
+        """
+        is_indian = (ticker.upper().endswith('.NS') or
+                     ticker.upper().endswith('.BO'))
 
         df = stock_df.copy()
         df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
 
-        # Normalise all column names to lowercase so stock_scraper.py column
-        # naming (SMA_5, SMA_20, RSI etc.) doesn't cause KeyErrors here.
+        # Normalise column names to lowercase
         df.columns = df.columns.str.lower()
-        # Restore the Date column with capital D — merge logic depends on it
         if 'date' in df.columns:
             df.rename(columns={'date': 'Date'}, inplace=True)
 
-        # ── Merge sentiment sources ───────────────────────────────────
+        # ── Drop known Indian market holiday rows where price is NaN ─────
+        # NSE/BSE have more holidays than NYSE. When price data has no
+        # entry for a holiday but sentiment data does, we get NaN price
+        # rows after the merge. We remove them here before that happens.
+        if is_indian:
+            indian_holidays = getattr(config, 'INDIAN_MARKET_HOLIDAYS', [])
+            holiday_dates   = pd.to_datetime(indian_holidays)
+            df = df[~(
+                df['Date'].isin(holiday_dates) & df['close'].isna()
+            )]
+
+        # ── Merge sentiment sources ───────────────────────────────────────
         if news_df is not None and not news_df.empty:
             news_df = news_df.copy()
-            news_df['Date'] = pd.to_datetime(news_df['Date']).dt.tz_localize(None)
+            news_df['Date'] = pd.to_datetime(
+                news_df['Date']).dt.tz_localize(None)
             df = df.merge(news_df, on='Date', how='left')
         else:
             for c in ['avg_sentiment', 'sentiment_std',
@@ -84,7 +98,8 @@ class FeatureEngineer:
 
         if reddit_df is not None and not reddit_df.empty:
             reddit_df = reddit_df.copy()
-            reddit_df['Date'] = pd.to_datetime(reddit_df['Date']).dt.tz_localize(None)
+            reddit_df['Date'] = pd.to_datetime(
+                reddit_df['Date']).dt.tz_localize(None)
             df = df.merge(reddit_df, on='Date', how='left')
         else:
             for c in ['reddit_avg_sentiment', 'reddit_weighted_sentiment',
@@ -94,7 +109,8 @@ class FeatureEngineer:
 
         if trends_df is not None and not trends_df.empty:
             trends_df = trends_df.copy()
-            trends_df['Date'] = pd.to_datetime(trends_df['Date']).dt.tz_localize(None)
+            trends_df['Date'] = pd.to_datetime(
+                trends_df['Date']).dt.tz_localize(None)
             trend_cols = ['Date', 'search_interest']
             for extra in ['search_momentum', 'search_spike']:
                 if extra in trends_df.columns:
@@ -104,7 +120,7 @@ class FeatureEngineer:
         else:
             df['search_interest'] = 0.0
 
-        # ── Fill and clip sentiment ───────────────────────────────────
+        # ── Fill and clip sentiment columns ───────────────────────────────
         sentiment_cols = [
             c for c in df.columns if any(x in c for x in
             ['sentiment', 'reddit', 'news', 'ratio',
@@ -117,7 +133,7 @@ class FeatureEngineer:
         )]
         df[clip_cols] = df[clip_cols].clip(-1, 1)
 
-        # ── Scale-free price & technical features ────────────────────
+        # ── Scale-free price & technical features ─────────────────────────
         eps = 1e-9
 
         df['price_vs_sma5']   = df['close'] / (df['sma_5']  + eps)
@@ -126,7 +142,9 @@ class FeatureEngineer:
         df['high_low_range']  = (df['high'] - df['low'])   / (df['close'] + eps)
         df['close_vs_open']   = (df['close'] - df['open']) / (df['open']  + eps)
         df['macd_normalised'] = df['macd'] / (df['close'] + eps)
-        df['macd_signal_gap'] = (df['macd'] - df['signal_line']) / (df['close'] + eps)
+        df['macd_signal_gap'] = (
+            (df['macd'] - df['signal_line']) / (df['close'] + eps)
+        )
         df['volatility_pct']  = df['volatility'] / (df['close'] + eps)
         df['rsi_norm']        = df['rsi'] / 100.0
 
@@ -139,15 +157,35 @@ class FeatureEngineer:
         df = self.create_rolling_features(df, windows=[3, 7, 14])
         df = self.create_lagged_features(df, sentiment_cols, lags=[1, 2, 3])
 
-        # ── Target ───────────────────────────────────────────────────
+        # ── Indian-specific features ──────────────────────────────────────
+        # NSE/BSE impose a 10% daily circuit breaker. Being close to the
+        # upper or lower circuit is a meaningful signal (momentum / reversal).
+        # For US stocks both features are 0 so the model ignores them.
+        df['is_indian_stock'] = 1.0 if is_indian else 0.0
+
+        if is_indian:
+            circuit_range = df['close'] * 0.10   # 10% of close price
+            df['upper_circuit_proximity'] = (
+                (df['high'] - df['close']) / (circuit_range + eps)
+            ).clip(0, 1)
+            df['lower_circuit_proximity'] = (
+                (df['close'] - df['low']) / (circuit_range + eps)
+            ).clip(0, 1)
+        else:
+            df['upper_circuit_proximity'] = 0.0
+            df['lower_circuit_proximity'] = 0.0
+
+        # ── Target ────────────────────────────────────────────────────────
         df['target'] = df['close'].pct_change(-1)
         df = df.dropna(subset=['target'])
 
-        # ── Fill remaining NaNs ───────────────────────────────────────
+        # ── Fill remaining NaNs ───────────────────────────────────────────
         scale_free_tech = [
             'price_vs_sma5', 'price_vs_sma20', 'sma5_vs_sma20',
             'high_low_range', 'close_vs_open', 'macd_normalised',
             'macd_signal_gap', 'volume_ratio', 'volatility_pct', 'rsi_norm',
+            'is_indian_stock',
+            'upper_circuit_proximity', 'lower_circuit_proximity',
         ] + [f'price_momentum_{d}d' for d in [1, 3, 5, 10]] \
           + [f'price_vs_sma{w}'      for w in [3, 7, 14]] \
           + [f'volatility_ratio_{w}' for w in [3, 7, 14]]
@@ -156,7 +194,7 @@ class FeatureEngineer:
         df[existing] = df[existing].ffill().bfill()
         df = df.fillna(0)
 
-        # ── Feature columns — NO raw dollar values ────────────────────
+        # ── Feature columns — NO raw price / volume values ────────────────
         exclude = {
             'Date', 'target',
             'close', 'open', 'high', 'low', 'volume',

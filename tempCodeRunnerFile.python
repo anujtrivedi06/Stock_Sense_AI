@@ -1,6 +1,0 @@
-from bs4 import BeautifulSoup
-
-with open("screener.html", "r") as f:
-    content = f.read()
-    soup = BeautifulSoup(content, "lxml")
-    print(soup.prettify())
